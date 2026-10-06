@@ -14,8 +14,6 @@ public static class NotificationScheduler
     private const int ANDROID_PENDING_LIMIT = 400;
     private const string ChannelId = "puff_channel";
 
-    private static bool iosAuthorized = false;
-
 #if UNITY_ANDROID
     private static bool androidChannelRegistered = false;
 #endif
@@ -23,26 +21,14 @@ public static class NotificationScheduler
     public static void Initialize()
     {
 #if UNITY_IOS
-        RequestIOSAuthorization();
+        // Authorization is handled automatically by the "Request Authorization
+        // on App Launch" checkbox in Project Settings -> Mobile Notifications.
+        // No runtime code needed here.
+        Debug.Log("[Notif] iOS initialization — authorization handled by Project Settings.");
 #elif UNITY_ANDROID
         RegisterAndroidChannel();
 #endif
     }
-
-#if UNITY_IOS
-    private static void RequestIOSAuthorization()
-    {
-        var options = AuthorizationOption.Alert
-                    | AuthorizationOption.Sound
-                    | AuthorizationOption.Badge;
-
-        iOSNotificationCenter.RequestAuthorization(options, (granted, error) =>
-        {
-            iosAuthorized = granted;
-            Debug.Log($"[Notif] iOS authorization granted: {granted}, error: {error}");
-        });
-    }
-#endif
 
 #if UNITY_ANDROID
     private static void RegisterAndroidChannel()
@@ -108,8 +94,6 @@ public static class NotificationScheduler
 #endif
     }
 
-    /// Schedules the wake-time notification plus the escalation series.
-    /// Escalation: at wake, +3h, +6h, +9h, then every 2h up to +72h.
     public static void ScheduleSleepEscalation(DateTime wakeTime)
     {
         CancelAll();
