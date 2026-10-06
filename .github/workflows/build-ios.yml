@@ -1,0 +1,96 @@
+name: Build iOS
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [main]
+
+jobs:
+  build-ios:
+    name: Build unsigned iOS .ipa
+    runs-on: macos-14
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Cache Unity Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-iOS-${{ hashFiles('ProjectSettings/ProjectVersion.txt') }}-${{ github.sha }}
+          restore-keys: |
+            Library-iOS-${{ hashFiles('ProjectSettings/ProjectVersion.txt') }}-
+            Library-iOS-
+
+      - name: Build Unity project for iOS (exports Xcode project)
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          targetPlatform: iOS
+          unityVersion: auto
+          allowDirtyBuild: true
+
+      - name: Inspect build output
+        run: |
+          echo "=== Contents of build/ ==="
+          ls -la build/ || true
+          echo "=== Contents of build/iOS/ ==="
+          ls -la build/iOS/ || true
+
+      - name: Package unsigned .ipa
+        run: |
+          set -e
+          cd build/iOS
+
+          # Find the .xcodeproj (Unity exports one)
+          XCPROJ=$(find . -maxdepth 1 -name "*.xcodeproj" | head -n 1)
+          if [ -z "$XCPROJ" ]; then
+            echo "ERROR: No .xcodeproj found in build/iOS/"
+            exit 1
+          fi
+          echo "Found Xcode project: $XCPROJ"
+
+          # Get scheme name
+          SCHEME=$(xcodebuild -list -project "$XCPROJ" | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}')
+          echo "Using scheme: $SCHEME"
+
+          # Archive unsigned
+          xcodebuild \
+            -project "$XCPROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/App.xcarchive" \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_ENTITLEMENTS="" \
+            | tail -n 100
+
+          # Package into .ipa
+          APP_PATH=$(find App.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app found in archive"
+            exit 1
+          fi
+          echo "Found app: $APP_PATH"
+
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          zip -r PuffZero-iOS-unsigned.ipa Payload
+          ls -la PuffZero-iOS-unsigned.ipa
+
+      - name: Upload .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: PuffZero-iOS-unsigned
+          path: build/iOS/PuffZero-iOS-unsigned.ipa
+          if-no-files-found: error
