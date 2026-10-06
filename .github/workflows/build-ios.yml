@@ -42,32 +42,27 @@ jobs:
         run: |
           echo "=== Contents of build/ ==="
           ls -la build/ || true
-          echo "=== Contents of build/iOS/ ==="
-          ls -la build/iOS/ || true
           echo "=== Looking for .xcodeproj ==="
           find build -name "*.xcodeproj" -maxdepth 4 || true
 
       - name: Package unsigned .ipa
         run: |
           set -e
-          
-          # Find the .xcodeproj anywhere under build/
+
           XCPROJ_PATH=$(find build -name "*.xcodeproj" -maxdepth 4 | head -n 1)
           if [ -z "$XCPROJ_PATH" ]; then
             echo "ERROR: No .xcodeproj found under build/"
             exit 1
           fi
           echo "Found Xcode project: $XCPROJ_PATH"
-          
-          # Go to the directory containing the xcodeproj
+
           XCODE_DIR=$(dirname "$XCPROJ_PATH")
           cd "$XCODE_DIR"
-          
+
           XCPROJ=$(basename "$XCPROJ_PATH")
           echo "Working directory: $PWD"
           echo "Xcode project file: $XCPROJ"
 
-          # Get scheme name
           SCHEME=$(xcodebuild -list -project "$XCPROJ" 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}')
           if [ -z "$SCHEME" ]; then
             SCHEME="Unity-iPhone"
@@ -88,10 +83,15 @@ jobs:
             CODE_SIGN_ENTITLEMENTS="" \
             | tail -n 100
 
-          # Package into .ipa
-          APP_PATH=$(find App.xcarchive/Products/Applications -maxdepth 1 -name "*.app" | head -n 1)
+          # --- FIX: search for the .app anywhere in the archive ---
+          echo "=== Searching for .app inside the archive ==="
+          find App.xcarchive -name "*.app" -maxdepth 6 || true
+
+          APP_PATH=$(find App.xcarchive -name "*.app" -maxdepth 6 | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app found in archive"
+            echo "ERROR: No .app found anywhere in App.xcarchive"
+            echo "=== Full archive tree ==="
+            find App.xcarchive -maxdepth 6
             exit 1
           fi
           echo "Found app: $APP_PATH"
@@ -100,8 +100,7 @@ jobs:
           cp -R "$APP_PATH" Payload/
           zip -r PuffZero-iOS-unsigned.ipa Payload
           ls -la PuffZero-iOS-unsigned.ipa
-          
-          # Move the ipa to a predictable location for upload
+
           mkdir -p /tmp/ipa-output
           cp PuffZero-iOS-unsigned.ipa /tmp/ipa-output/
 
