@@ -40,12 +40,10 @@ jobs:
 
       - name: Inspect build output
         run: |
-          echo "=== Contents of build/ ==="
-          ls -la build/ || true
           echo "=== Looking for .xcodeproj ==="
           find build -name "*.xcodeproj" -maxdepth 4 || true
 
-      - name: Package unsigned .ipa
+      - name: Build iOS app (.app)
         run: |
           set -e
 
@@ -69,31 +67,34 @@ jobs:
           fi
           echo "Using scheme: $SCHEME"
 
-          # Archive unsigned
-                    xcodebuild \
+          # Build the .app directly into a known output folder.
+          # This bypasses the broken archive step entirely.
+          OUTPUT_DIR="$PWD/build-output"
+          mkdir -p "$OUTPUT_DIR"
+
+          xcodebuild \
             -project "$XCPROJ" \
             -scheme "$SCHEME" \
             -configuration Release \
             -sdk iphoneos \
-            -archivePath "$PWD/App.xcarchive" \
-            archive \
+            -destination "generic/platform=iOS" \
+            CONFIGURATION_BUILD_DIR="$OUTPUT_DIR" \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_ENTITLEMENTS="" \
-            INSTALL_PATH=/Applications \
             SKIP_INSTALL=NO \
+            INSTALL_PATH=/Applications \
+            build \
             | tail -n 100
 
-          # --- FIX: search for the .app anywhere in the archive ---
-          echo "=== Searching for .app inside the archive ==="
-          find App.xcarchive -name "*.app" -maxdepth 6 || true
+          echo "=== Contents of output dir ==="
+          ls -la "$OUTPUT_DIR"
 
-          APP_PATH=$(find App.xcarchive -name "*.app" -maxdepth 6 | head -n 1)
+          APP_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app found anywhere in App.xcarchive"
-            echo "=== Full archive tree ==="
-            find App.xcarchive -maxdepth 6
+            echo "ERROR: No .app found in $OUTPUT_DIR"
+            find "$OUTPUT_DIR" -maxdepth 4
             exit 1
           fi
           echo "Found app: $APP_PATH"
