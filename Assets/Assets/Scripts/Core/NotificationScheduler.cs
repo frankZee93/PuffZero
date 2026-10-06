@@ -14,6 +14,12 @@ public static class NotificationScheduler
     private const int ANDROID_PENDING_LIMIT = 400;
     private const string ChannelId = "puff_channel";
 
+#if UNITY_IOS
+    private const string PuffCategoryId = "puff_category";
+    public const string ActionSmokedId = "action_smoked";
+    public const string ActionSkipId = "action_skip";
+#endif
+
 #if UNITY_ANDROID
     private static bool androidChannelRegistered = false;
 #endif
@@ -21,14 +27,39 @@ public static class NotificationScheduler
     public static void Initialize()
     {
 #if UNITY_IOS
-        // Authorization is handled automatically by the "Request Authorization
-        // on App Launch" checkbox in Project Settings -> Mobile Notifications.
-        // No runtime code needed here.
-        Debug.Log("[Notif] iOS initialization — authorization handled by Project Settings.");
+        RegisterIOSCategories();
 #elif UNITY_ANDROID
         RegisterAndroidChannel();
 #endif
     }
+
+#if UNITY_IOS
+    private static void RegisterIOSCategories()
+    {
+        // iOSNotificationActionOptions.None means: handle the action in the background,
+        // without bringing the app to the foreground. Perfect for logging a puff
+        // while the user is doing something else.
+        var smokedAction = new iOSNotificationAction(
+            ActionSmokedId,
+            "I Smoked",
+            iOSNotificationActionOptions.None
+        );
+
+        var skipAction = new iOSNotificationAction(
+            ActionSkipId,
+            "Skip",
+            iOSNotificationActionOptions.None
+        );
+
+        var category = new iOSNotificationCategory(PuffCategoryId);
+        category.AddAction(smokedAction);
+        category.AddAction(skipAction);
+
+        iOSNotificationCenter.SetNotificationCategories(new[] { category });
+
+        Debug.Log("[Notif] iOS category 'puff_category' registered with 2 background actions.");
+    }
+#endif
 
 #if UNITY_ANDROID
     private static void RegisterAndroidChannel()
@@ -160,6 +191,7 @@ public static class NotificationScheduler
             ShowInForeground = true,
             ForegroundPresentationOption = (PresentationOption.Alert | PresentationOption.Sound),
             Trigger = trigger,
+            CategoryIdentifier = PuffCategoryId,
         };
 
         iOSNotificationCenter.ScheduleNotification(notification);

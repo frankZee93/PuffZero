@@ -1,9 +1,14 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using TMPro;
+
+#if UNITY_IOS
+using Unity.Notifications.iOS;
+#endif
 
 public class MainAppController : MonoBehaviour
 {
@@ -76,6 +81,11 @@ public class MainAppController : MonoBehaviour
     private DateTime? pauseEndTime = null;
     private bool IsPaused => pauseEndTime.HasValue;
 
+    // Tracks the last notification response we already handled, to prevent double-processing.
+#if UNITY_IOS
+    private string lastProcessedNotificationId = null;
+#endif
+
     // ================================================================
     // LIFECYCLE
     // ================================================================
@@ -90,7 +100,6 @@ public class MainAppController : MonoBehaviour
             return;
         }
 
-        // Restore pause
         pauseEndTime = UserData.PauseEndTime;
         if (pauseEndTime.HasValue && DateTime.Now >= pauseEndTime.Value)
         {
@@ -99,7 +108,6 @@ public class MainAppController : MonoBehaviour
             UserData.PauseStartTime = null;
         }
 
-        // Restore sleep mode
         sleepMode = UserData.SleepModeActive;
         if (sleepMode && UserData.SleepModeStartedAt.HasValue)
         {
@@ -120,7 +128,6 @@ public class MainAppController : MonoBehaviour
         DateTime? pauseStart = UserData.PauseStartTime;
         DateTime? pauseEnd = pauseEndTime;
 
-        // Catch-up loop
         while (currentPuffIndex < schedule.Count &&
                new DateTime(schedule[currentPuffIndex]) <= now)
         {
@@ -146,8 +153,6 @@ public class MainAppController : MonoBehaviour
                     Debug.Log($"Puff {currentPuffIndex} at {puffTime} missed — declined.");
                     UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
                     consecutiveMisses++;
-
-                    // Track the most recent auto-declined puff for recovery.
                     UserData.LastDeclinedAtTicks = puffTime.Ticks;
                     UserData.LastDeclinedIndex = currentPuffIndex;
                 }
@@ -176,7 +181,6 @@ public class MainAppController : MonoBehaviour
             Debug.Log($"[MainApp] Next puff pushed out of sleep window -> {nextPuffTime}");
         }
 
-        // Wire buttons
         smokeButton.onClick.AddListener(OnSmokeButtonClicked);
         skipButton.onClick.AddListener(OnSkipButtonClicked);
         pauseButton.onClick.AddListener(OpenPauseMenu);
@@ -219,13 +223,17 @@ public class MainAppController : MonoBehaviour
 
         isInitialized = true;
         UpdateUI();
+
+#if UNITY_IOS
+        // Handle any notification action that was tapped while the app was closed.
+        ProcessPendingNotificationAction();
+#endif
     }
 
     void Update()
     {
         if (!isInitialized || currentPuffIndex >= schedule.Count) return;
 
-        // Guard: don't fight with open secondary panels
         if (pausePanel.activeSelf) return;
         if (settingsPanel.activeSelf) return;
         if (confirmResetPanel.activeSelf) return;
@@ -238,14 +246,12 @@ public class MainAppController : MonoBehaviour
 
         ValidateExtendedDay();
 
-        // --- Sleep mode ---
         if (sleepMode)
         {
             UpdateSleepModeUI(now);
             return;
         }
 
-        // --- Pause expiry ---
         if (IsPaused && now >= pauseEndTime.Value)
         {
             pauseEndTime = null;
@@ -281,7 +287,6 @@ public class MainAppController : MonoBehaviour
         activePausePanel.SetActive(false);
         menuPanel.SetActive(true);
 
-        // Puff expiry check
         if (now >= nextPuffTime && smokePromptShownAt.HasValue)
         {
             TimeSpan promptAge = now - smokePromptShownAt.Value;
@@ -324,6 +329,74 @@ public class MainAppController : MonoBehaviour
                 timeLeft.Hours, timeLeft.Minutes, timeLeft.Seconds);
         }
     }
+
+    // ================================================================
+    // NOTIFICATION ACTION HANDLING
+    // ================================================================
+
+#if UNITY_IOS
+    void ProcessPendingNotificationAction()
+    {
+        StartCoroutine(HandleNotificationActionCoroutine());
+    }
+
+    private IEnumerator HandleNotificationActionCoroutine()
+    {
+        // Give Unity's notification system a moment to deliver the response.
+        yield return null;
+
+        var notification = iOSNotificationCenter.GetLastRespondedNotification();
+        if (notification == null) yield break;
+
+        // Only handle puff notifications.
+        if (string.IsNullOrEmpty(notification.Identifier) ||
+            !notification.Identifier.StartsWith("puff_")) yield break;
+
+        // Prevent double-processing of the same notification.
+        if (lastProcessedNotificationId == notification.Identifier) yield break;
+
+        // The action identifier comes through the Data field via GameCI's wrapper.
+        // iOSNotificationCenter delivers the last action via a separate API on some
+        // versions; we read it defensively.
+        string actionId = null;
+#if UNITY_IOS
+        actionId = iOSNotificationCenter.GetLastRespondedNotificationActionId();
+#endif
+
+        Debug.Log($"[Notif] Response — id={notification.Identifier}, action={actionId}");
+
+        lastProcessedNotificationId = notification.Identifier;
+
+        if (actionId == NotificationScheduler.ActionSmokedId)
+        {
+            if (currentPuffIndex < schedule.Count)
+            {
+                Debug.Log("[Notif] Background action: I Smoked.");
+                UserData.LogPuffToday();
+                consecutiveMisses = 0;
+                smokePromptShownAt = null;
+                AdvanceToNextPuff(true);
+            }
+        }
+        else if (actionId == NotificationScheduler.ActionSkipId)
+        {
+            if (currentPuffIndex < schedule.Count)
+            {
+                Debug.Log("[Notif] Background action: Skip.");
+                UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
+                consecutiveMisses++;
+                smokePromptShownAt = null;
+                AdvanceToNextPuff(false);
+                CheckAutoSleepTrigger();
+            }
+        }
+        else
+        {
+            // Body tap — no action.
+            Debug.Log("[Notif] User tapped the notification body (no action).");
+        }
+    }
+#endif
 
     // ================================================================
     // SLEEP MODE
@@ -494,7 +567,7 @@ public class MainAppController : MonoBehaviour
     }
 
     // ================================================================
-    // EXTENDED DAY (woke up early)
+    // EXTENDED DAY
     // ================================================================
 
     void StartExtendedDay()
@@ -632,7 +705,7 @@ public class MainAppController : MonoBehaviour
     }
 
     // ================================================================
-    // RECOVERY (recent decline correction)
+    // RECOVERY
     // ================================================================
 
     void CheckRecovery()
@@ -677,7 +750,7 @@ public class MainAppController : MonoBehaviour
     }
 
     // ================================================================
-    // REDISTRIBUTE (normal I'm up now, not in sleep gap)
+    // REDISTRIBUTE
     // ================================================================
 
     void RedistributeRemainingPuffsToday()
@@ -862,7 +935,13 @@ public class MainAppController : MonoBehaviour
 
     void OnApplicationFocus(bool hasFocus)
     {
-        if (hasFocus) RefreshNotifications();
+        if (!hasFocus) return;
+
+        RefreshNotifications();
+
+#if UNITY_IOS
+        ProcessPendingNotificationAction();
+#endif
     }
 
     // ================================================================
