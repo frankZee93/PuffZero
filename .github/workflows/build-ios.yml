@@ -61,14 +61,15 @@ jobs:
           echo "Working directory: $PWD"
           echo "Xcode project file: $XCPROJ"
 
-          SCHEME=$(xcodebuild -list -project "$XCPROJ" 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}')
-          if [ -z "$SCHEME" ]; then
-            SCHEME="Unity-iPhone"
-          fi
+          # Print what Xcode knows about this project
+          echo "=== Schemes and targets ==="
+          xcodebuild -list -project "$XCPROJ" || true
+
+          # Explicitly use the Unity-iPhone scheme (NOT GameAssembly)
+          SCHEME="Unity-iPhone"
           echo "Using scheme: $SCHEME"
 
           # Build the .app directly into a known output folder.
-          # This bypasses the broken archive step entirely.
           OUTPUT_DIR="$PWD/build-output"
           mkdir -p "$OUTPUT_DIR"
 
@@ -92,9 +93,18 @@ jobs:
           ls -la "$OUTPUT_DIR"
 
           APP_PATH=$(find "$OUTPUT_DIR" -maxdepth 1 -name "*.app" | head -n 1)
+
+          # Fallback: search DerivedData if not in OUTPUT_DIR
           if [ -z "$APP_PATH" ]; then
-            echo "ERROR: No .app found in $OUTPUT_DIR"
-            find "$OUTPUT_DIR" -maxdepth 4
+            echo "Not found in OUTPUT_DIR. Searching DerivedData..."
+            APP_PATH=$(find ~/Library/Developer/Xcode/DerivedData -name "*.app" -path "*Release-iphoneos*" -maxdepth 6 2>/dev/null | head -n 1)
+          fi
+
+          if [ -z "$APP_PATH" ]; then
+            echo "ERROR: No .app found anywhere"
+            echo "=== Searching whole workspace for .app ==="
+            find . -name "*.app" -maxdepth 8 2>/dev/null || true
+            find ~/Library/Developer/Xcode/DerivedData -name "*.app" 2>/dev/null || true
             exit 1
           fi
           echo "Found app: $APP_PATH"
