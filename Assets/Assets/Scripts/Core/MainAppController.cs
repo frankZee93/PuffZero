@@ -81,7 +81,6 @@ public class MainAppController : MonoBehaviour
     private DateTime? pauseEndTime = null;
     private bool IsPaused => pauseEndTime.HasValue;
 
-    // Tracks the last notification response we already handled, to prevent double-processing.
 #if UNITY_IOS
     private string lastProcessedNotificationId = null;
 #endif
@@ -225,7 +224,6 @@ public class MainAppController : MonoBehaviour
         UpdateUI();
 
 #if UNITY_IOS
-        // Handle any notification action that was tapped while the app was closed.
         ProcessPendingNotificationAction();
 #endif
     }
@@ -342,30 +340,24 @@ public class MainAppController : MonoBehaviour
 
     private IEnumerator HandleNotificationActionCoroutine()
     {
-        // Give Unity's notification system a moment to deliver the response.
-        yield return null;
+        // QueryLastRespondedNotification returns an operation that may need
+        // a few frames to complete (especially on cold start).
+        var op = iOSNotificationCenter.QueryLastRespondedNotification();
+        yield return op;
 
-        var notification = iOSNotificationCenter.GetLastRespondedNotification();
-        if (notification == null) yield break;
+        if (op.Notification == null) yield break;
 
         // Only handle puff notifications.
-        if (string.IsNullOrEmpty(notification.Identifier) ||
-            !notification.Identifier.StartsWith("puff_")) yield break;
+        if (string.IsNullOrEmpty(op.Notification.Identifier) ||
+            !op.Notification.Identifier.StartsWith("puff_")) yield break;
 
         // Prevent double-processing of the same notification.
-        if (lastProcessedNotificationId == notification.Identifier) yield break;
+        if (lastProcessedNotificationId == op.Notification.Identifier) yield break;
 
-        // The action identifier comes through the Data field via GameCI's wrapper.
-        // iOSNotificationCenter delivers the last action via a separate API on some
-        // versions; we read it defensively.
-        string actionId = null;
-#if UNITY_IOS
-        actionId = iOSNotificationCenter.GetLastRespondedNotificationActionId();
-#endif
+        string actionId = op.ActionId;
+        Debug.Log($"[Notif] Response — id={op.Notification.Identifier}, action={actionId}");
 
-        Debug.Log($"[Notif] Response — id={notification.Identifier}, action={actionId}");
-
-        lastProcessedNotificationId = notification.Identifier;
+        lastProcessedNotificationId = op.Notification.Identifier;
 
         if (actionId == NotificationScheduler.ActionSmokedId)
         {
@@ -392,7 +384,6 @@ public class MainAppController : MonoBehaviour
         }
         else
         {
-            // Body tap — no action.
             Debug.Log("[Notif] User tapped the notification body (no action).");
         }
     }
