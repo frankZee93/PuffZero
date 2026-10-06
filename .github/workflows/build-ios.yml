@@ -70,7 +70,7 @@ jobs:
           echo "Using scheme: $SCHEME"
 
           # Archive unsigned
-          xcodebuild \
+                    xcodebuild \
             -project "$XCPROJ" \
             -scheme "$SCHEME" \
             -configuration Release \
@@ -81,6 +81,8 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_ENTITLEMENTS="" \
+            INSTALL_PATH=/Applications \
+            SKIP_INSTALL=NO \
             | tail -n 100
 
           # --- FIX: search for the .app anywhere in the archive ---
