@@ -36,6 +36,7 @@ jobs:
           targetPlatform: iOS
           unityVersion: auto
           allowDirtyBuild: true
+          buildOptions: AcceptExternalModificationsToPlayer
 
       - name: Inspect build output
         run: |
@@ -43,22 +44,34 @@ jobs:
           ls -la build/ || true
           echo "=== Contents of build/iOS/ ==="
           ls -la build/iOS/ || true
+          echo "=== Looking for .xcodeproj ==="
+          find build -name "*.xcodeproj" -maxdepth 4 || true
 
       - name: Package unsigned .ipa
         run: |
           set -e
-          cd build/iOS
-
-          # Find the .xcodeproj (Unity exports one)
-          XCPROJ=$(find . -maxdepth 1 -name "*.xcodeproj" | head -n 1)
-          if [ -z "$XCPROJ" ]; then
-            echo "ERROR: No .xcodeproj found in build/iOS/"
+          
+          # Find the .xcodeproj anywhere under build/
+          XCPROJ_PATH=$(find build -name "*.xcodeproj" -maxdepth 4 | head -n 1)
+          if [ -z "$XCPROJ_PATH" ]; then
+            echo "ERROR: No .xcodeproj found under build/"
             exit 1
           fi
-          echo "Found Xcode project: $XCPROJ"
+          echo "Found Xcode project: $XCPROJ_PATH"
+          
+          # Go to the directory containing the xcodeproj
+          XCODE_DIR=$(dirname "$XCPROJ_PATH")
+          cd "$XCODE_DIR"
+          
+          XCPROJ=$(basename "$XCPROJ_PATH")
+          echo "Working directory: $PWD"
+          echo "Xcode project file: $XCPROJ"
 
           # Get scheme name
-          SCHEME=$(xcodebuild -list -project "$XCPROJ" | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}')
+          SCHEME=$(xcodebuild -list -project "$XCPROJ" 2>/dev/null | awk '/Schemes:/{flag=1; next} flag && NF {print $1; exit}')
+          if [ -z "$SCHEME" ]; then
+            SCHEME="Unity-iPhone"
+          fi
           echo "Using scheme: $SCHEME"
 
           # Archive unsigned
@@ -87,10 +100,14 @@ jobs:
           cp -R "$APP_PATH" Payload/
           zip -r PuffZero-iOS-unsigned.ipa Payload
           ls -la PuffZero-iOS-unsigned.ipa
+          
+          # Move the ipa to a predictable location for upload
+          mkdir -p /tmp/ipa-output
+          cp PuffZero-iOS-unsigned.ipa /tmp/ipa-output/
 
       - name: Upload .ipa
         uses: actions/upload-artifact@v4
         with:
           name: PuffZero-iOS-unsigned
-          path: build/iOS/PuffZero-iOS-unsigned.ipa
+          path: /tmp/ipa-output/PuffZero-iOS-unsigned.ipa
           if-no-files-found: error
