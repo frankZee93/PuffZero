@@ -36,9 +36,6 @@ public static class NotificationScheduler
 #if UNITY_IOS
     private static void RegisterIOSCategories()
     {
-        // iOSNotificationActionOptions.None means: handle the action in the background,
-        // without bringing the app to the foreground. Perfect for logging a puff
-        // while the user is doing something else.
         var smokedAction = new iOSNotificationAction(
             ActionSmokedId,
             "I Smoked",
@@ -115,7 +112,8 @@ public static class NotificationScheduler
             if (t <= now.AddSeconds(30)) continue;
             if (pauseEndTime.HasValue && t <= pauseEndTime.Value) continue;
 
-            string body = $"Puff {dayPuffNumber + scheduled} of {dayPuffTotal} today. Tap to log it.";
+            // Numbers removed — the previous count was unreliable.
+            string body = "Time for your next puff. Tap to log it.";
             ScheduleOne(t, $"puff_{i}", "Time to Smoke", body);
             scheduled++;
         }

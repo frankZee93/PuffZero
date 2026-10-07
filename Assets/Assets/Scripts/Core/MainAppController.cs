@@ -58,6 +58,9 @@ public class MainAppController : MonoBehaviour
     public Button recoveryYesButton;
     public Button recoveryNoButton;
 
+    [Header("Pending Puffs")]
+    public PendingPuffsController pendingPuffsController;
+
     [Header("Pause Settings")]
     public TMP_InputField pauseHoursInput;
 
@@ -80,6 +83,9 @@ public class MainAppController : MonoBehaviour
 
     private DateTime? pauseEndTime = null;
     private bool IsPaused => pauseEndTime.HasValue;
+
+    // Pending puffs — count of past-due puffs awaiting the user's decision.
+    private int pendingPuffCount = 0;
 
 #if UNITY_IOS
     private string lastProcessedNotificationId = null;
@@ -123,63 +129,7 @@ public class MainAppController : MonoBehaviour
 
         currentPuffIndex = UserData.CurrentPuffIndex;
 
-        DateTime now = DateTime.Now;
-        DateTime? pauseStart = UserData.PauseStartTime;
-        DateTime? pauseEnd = pauseEndTime;
-
-        while (currentPuffIndex < schedule.Count &&
-               new DateTime(schedule[currentPuffIndex]) <= now)
-        {
-            DateTime puffTime = new DateTime(schedule[currentPuffIndex]);
-
-            if (sleepMode)
-            {
-                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — sleep mode active.");
-            }
-            else
-            {
-                bool wasDuringPause = pauseStart.HasValue &&
-                                      pauseEnd.HasValue &&
-                                      puffTime >= pauseStart.Value &&
-                                      puffTime <= pauseEnd.Value;
-
-                if (wasDuringPause)
-                {
-                    Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — inside pause window.");
-                }
-                else
-                {
-                    Debug.Log($"Puff {currentPuffIndex} at {puffTime} missed — declined.");
-                    UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-                    consecutiveMisses++;
-                    UserData.LastDeclinedAtTicks = puffTime.Ticks;
-                    UserData.LastDeclinedIndex = currentPuffIndex;
-                }
-            }
-
-            currentPuffIndex++;
-        }
-
-        UserData.CurrentPuffIndex = currentPuffIndex;
-        UserData.Save();
-
-        CheckAutoSleepTrigger();
-        ValidateExtendedDay();
-
-        if (currentPuffIndex >= schedule.Count)
-        {
-            ShowFinishedState();
-            return;
-        }
-
-        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-
-        if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
-        {
-            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
-            Debug.Log($"[MainApp] Next puff pushed out of sleep window -> {nextPuffTime}");
-        }
-
+        // Wire all buttons
         smokeButton.onClick.AddListener(OnSmokeButtonClicked);
         skipButton.onClick.AddListener(OnSkipButtonClicked);
         pauseButton.onClick.AddListener(OpenPauseMenu);
@@ -215,18 +165,133 @@ public class MainAppController : MonoBehaviour
         if (recoveryYesButton != null) recoveryYesButton.onClick.AddListener(OnRecoveryYesClicked);
         if (recoveryNoButton != null) recoveryNoButton.onClick.AddListener(OnRecoveryNoClicked);
 
-        CheckRecovery();
+        isInitialized = true;
 
-        if (!IsPaused && !sleepMode)
+        // Run the catch-up. This decides whether to show the pending panel
+        // or to silently skip during sleep/pause.
+        RunCatchUp();
+
+        CheckAutoSleepTrigger();
+        ValidateExtendedDay();
+
+        if (currentPuffIndex >= schedule.Count)
+        {
+            ShowFinishedState();
+            return;
+        }
+
+        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+
+        if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
+        {
+            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
+            Debug.Log($"[MainApp] Next puff pushed out of sleep window -> {nextPuffTime}");
+        }
+
+        if (pendingPuffCount > 0 && pendingPuffsController != null)
+        {
+            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
+        }
+        else
+        {
+            CheckRecovery();
+        }
+
+        if (!IsPaused && !sleepMode && pendingPuffCount == 0)
             RefreshNotifications();
 
-        isInitialized = true;
         UpdateUI();
 
 #if UNITY_IOS
         ProcessPendingNotificationAction();
 #endif
     }
+
+    // ================================================================
+    // CATCH-UP — decides how to handle past-due puffs
+    // ================================================================
+
+    void RunCatchUp()
+    {
+        DateTime now = DateTime.Now;
+        DateTime? pauseStart = UserData.PauseStartTime;
+        DateTime? pauseEnd = pauseEndTime;
+
+        pendingPuffCount = 0;
+
+        while (currentPuffIndex < schedule.Count &&
+               new DateTime(schedule[currentPuffIndex]) <= now)
+        {
+            DateTime puffTime = new DateTime(schedule[currentPuffIndex]);
+
+            if (sleepMode)
+            {
+                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — sleep mode active.");
+                currentPuffIndex++;
+                continue;
+            }
+
+            bool wasDuringPause = pauseStart.HasValue &&
+                                  pauseEnd.HasValue &&
+                                  puffTime >= pauseStart.Value &&
+                                  puffTime <= pauseEnd.Value;
+
+            if (wasDuringPause)
+            {
+                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — inside pause window.");
+                currentPuffIndex++;
+                continue;
+            }
+
+            // This past-due puff is unaccounted for. Stop advancing —
+            // the user will decide what to do with all of them at once.
+            Debug.Log($"Puff {currentPuffIndex} at {puffTime} is pending user decision.");
+            pendingPuffCount++;
+            currentPuffIndex++;
+        }
+
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+    }
+
+    public void ResolveAllPending(bool smoked)
+    {
+        Debug.Log($"[Pending] Resolving {pendingPuffCount} puffs — smoked={smoked}");
+
+        for (int i = 0; i < pendingPuffCount; i++)
+        {
+            if (smoked) UserData.LogPuffToday();
+            else UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
+        }
+
+        pendingPuffCount = 0;
+        UserData.Save();
+
+        // Advance past any additional past-due puffs that may have accumulated.
+        DateTime now = DateTime.Now;
+        while (currentPuffIndex < schedule.Count &&
+               new DateTime(schedule[currentPuffIndex]) <= now)
+        {
+            currentPuffIndex++;
+        }
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+
+        if (currentPuffIndex >= schedule.Count)
+        {
+            ShowFinishedState();
+            return;
+        }
+
+        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+        RefreshNotifications();
+        CheckRecovery();
+        UpdateUI();
+    }
+
+    // ================================================================
+    // UPDATE
+    // ================================================================
 
     void Update()
     {
@@ -239,6 +304,7 @@ public class MainAppController : MonoBehaviour
         if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) return;
         if (overBudgetPanel != null && overBudgetPanel.activeSelf) return;
         if (recoveryPanel != null && recoveryPanel.activeSelf) return;
+        if (pendingPuffsController != null && pendingPuffsController.IsPanelActive()) return;
 
         DateTime now = DateTime.Now;
 
@@ -340,18 +406,14 @@ public class MainAppController : MonoBehaviour
 
     private IEnumerator HandleNotificationActionCoroutine()
     {
-        // QueryLastRespondedNotification returns an operation that may need
-        // a few frames to complete (especially on cold start).
         var op = iOSNotificationCenter.QueryLastRespondedNotification();
         yield return op;
 
         if (op.Notification == null) yield break;
 
-        // Only handle puff notifications.
         if (string.IsNullOrEmpty(op.Notification.Identifier) ||
             !op.Notification.Identifier.StartsWith("puff_")) yield break;
 
-        // Prevent double-processing of the same notification.
         if (lastProcessedNotificationId == op.Notification.Identifier) yield break;
 
         string actionId = op.ActionId;
