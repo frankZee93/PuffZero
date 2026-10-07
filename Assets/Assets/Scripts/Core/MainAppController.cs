@@ -84,7 +84,7 @@ public class MainAppController : MonoBehaviour
     private DateTime? pauseEndTime = null;
     private bool IsPaused => pauseEndTime.HasValue;
 
-    // Pending puffs — count of past-due puffs awaiting the user's decision.
+    // Count of past-due puffs awaiting the user's single cumulative decision.
     private int pendingPuffCount = 0;
 
 #if UNITY_IOS
@@ -167,10 +167,20 @@ public class MainAppController : MonoBehaviour
 
         isInitialized = true;
 
-        // Run the catch-up. This decides whether to show the pending panel
-        // or to silently skip during sleep/pause.
-        RunCatchUp();
+#if UNITY_IOS
+        StartCoroutine(StartupRoutine());
+#else
+        RunStartupCatchUp();
+#endif
+    }
 
+    // ================================================================
+    // STARTUP / RESUME ROUTINES
+    // ================================================================
+
+    private void RunStartupCatchUp()
+    {
+        RunCatchUp();
         CheckAutoSleepTrigger();
         ValidateExtendedDay();
 
@@ -181,7 +191,6 @@ public class MainAppController : MonoBehaviour
         }
 
         nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-
         if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
         {
             nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
@@ -201,11 +210,56 @@ public class MainAppController : MonoBehaviour
             RefreshNotifications();
 
         UpdateUI();
+    }
 
 #if UNITY_IOS
-        ProcessPendingNotificationAction();
-#endif
+    private IEnumerator StartupRoutine()
+    {
+        var op = iOSNotificationCenter.QueryLastRespondedNotification();
+        yield return op;
+
+        if (op.Notification != null &&
+            !string.IsNullOrEmpty(op.Notification.Identifier) &&
+            op.Notification.Identifier.StartsWith("puff_") &&
+            lastProcessedNotificationId != op.Notification.Identifier)
+        {
+            lastProcessedNotificationId = op.Notification.Identifier;
+            Debug.Log($"[Notif] Startup response — id={op.Notification.Identifier}, action={op.ActionId}");
+            ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
+        }
+
+        RunStartupCatchUp();
     }
+
+    // Applies a notification answer to the schedule, advancing past every
+    // puff up to and including the one that was answered.
+    private void ApplyNotificationAnswer(string identifier, string actionId)
+    {
+        if (string.IsNullOrEmpty(identifier) || !identifier.StartsWith("puff_")) return;
+
+        int answeredIndex = -1;
+        if (!int.TryParse(identifier.Substring(5), out answeredIndex)) return;
+        if (answeredIndex < 0) return;
+
+        while (currentPuffIndex <= answeredIndex && currentPuffIndex < schedule.Count)
+            currentPuffIndex++;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+
+        if (actionId == NotificationScheduler.ActionSmokedId)
+        {
+            UserData.LogPuffToday();
+            consecutiveMisses = 0;
+        }
+        else if (actionId == NotificationScheduler.ActionSkipId)
+        {
+            UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
+            consecutiveMisses++;
+        }
+
+        smokePromptShownAt = null;
+        UserData.Save();
+    }
+#endif
 
     // ================================================================
     // CATCH-UP — decides how to handle past-due puffs
@@ -243,8 +297,6 @@ public class MainAppController : MonoBehaviour
                 continue;
             }
 
-            // This past-due puff is unaccounted for. Stop advancing —
-            // the user will decide what to do with all of them at once.
             Debug.Log($"Puff {currentPuffIndex} at {puffTime} is pending user decision.");
             pendingPuffCount++;
             currentPuffIndex++;
@@ -264,10 +316,14 @@ public class MainAppController : MonoBehaviour
             else UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
         }
 
+        if (!smoked)
+            consecutiveMisses += pendingPuffCount;
+        else
+            consecutiveMisses = 0;
+
         pendingPuffCount = 0;
         UserData.Save();
 
-        // Advance past any additional past-due puffs that may have accumulated.
         DateTime now = DateTime.Now;
         while (currentPuffIndex < schedule.Count &&
                new DateTime(schedule[currentPuffIndex]) <= now)
@@ -284,6 +340,9 @@ public class MainAppController : MonoBehaviour
         }
 
         nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+        if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
+            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
+
         RefreshNotifications();
         CheckRecovery();
         UpdateUI();
@@ -304,7 +363,14 @@ public class MainAppController : MonoBehaviour
         if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) return;
         if (overBudgetPanel != null && overBudgetPanel.activeSelf) return;
         if (recoveryPanel != null && recoveryPanel.activeSelf) return;
+
         if (pendingPuffsController != null && pendingPuffsController.IsPanelActive()) return;
+
+        if (pendingPuffCount > 0 && pendingPuffsController != null)
+        {
+            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
+            return;
+        }
 
         DateTime now = DateTime.Now;
 
@@ -393,63 +459,6 @@ public class MainAppController : MonoBehaviour
                 timeLeft.Hours, timeLeft.Minutes, timeLeft.Seconds);
         }
     }
-
-    // ================================================================
-    // NOTIFICATION ACTION HANDLING
-    // ================================================================
-
-#if UNITY_IOS
-    void ProcessPendingNotificationAction()
-    {
-        StartCoroutine(HandleNotificationActionCoroutine());
-    }
-
-    private IEnumerator HandleNotificationActionCoroutine()
-    {
-        var op = iOSNotificationCenter.QueryLastRespondedNotification();
-        yield return op;
-
-        if (op.Notification == null) yield break;
-
-        if (string.IsNullOrEmpty(op.Notification.Identifier) ||
-            !op.Notification.Identifier.StartsWith("puff_")) yield break;
-
-        if (lastProcessedNotificationId == op.Notification.Identifier) yield break;
-
-        string actionId = op.ActionId;
-        Debug.Log($"[Notif] Response — id={op.Notification.Identifier}, action={actionId}");
-
-        lastProcessedNotificationId = op.Notification.Identifier;
-
-        if (actionId == NotificationScheduler.ActionSmokedId)
-        {
-            if (currentPuffIndex < schedule.Count)
-            {
-                Debug.Log("[Notif] Background action: I Smoked.");
-                UserData.LogPuffToday();
-                consecutiveMisses = 0;
-                smokePromptShownAt = null;
-                AdvanceToNextPuff(true);
-            }
-        }
-        else if (actionId == NotificationScheduler.ActionSkipId)
-        {
-            if (currentPuffIndex < schedule.Count)
-            {
-                Debug.Log("[Notif] Background action: Skip.");
-                UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-                consecutiveMisses++;
-                smokePromptShownAt = null;
-                AdvanceToNextPuff(false);
-                CheckAutoSleepTrigger();
-            }
-        }
-        else
-        {
-            Debug.Log("[Notif] User tapped the notification body (no action).");
-        }
-    }
-#endif
 
     // ================================================================
     // SLEEP MODE
@@ -981,20 +990,88 @@ public class MainAppController : MonoBehaviour
         NotificationScheduler.CancelAll();
     }
 
+    // ================================================================
+    // RESUME / FOCUS
+    // ================================================================
+
     void OnApplicationPause(bool paused)
     {
-        if (!paused) RefreshNotifications();
+        if (!paused) OnResumeFromBackground();
     }
 
     void OnApplicationFocus(bool hasFocus)
     {
         if (!hasFocus) return;
+        OnResumeFromBackground();
+    }
+
+    private void OnResumeFromBackground()
+    {
+        if (!isInitialized) return;
 
         RefreshNotifications();
 
 #if UNITY_IOS
-        ProcessPendingNotificationAction();
+        StartCoroutine(ResumeRoutine());
+#else
+        HandlePendingPuffsOnResume();
 #endif
+    }
+
+#if UNITY_IOS
+    private IEnumerator ResumeRoutine()
+    {
+        var op = iOSNotificationCenter.QueryLastRespondedNotification();
+        yield return op;
+
+        if (op.Notification != null &&
+            !string.IsNullOrEmpty(op.Notification.Identifier) &&
+            op.Notification.Identifier.StartsWith("puff_") &&
+            lastProcessedNotificationId != op.Notification.Identifier)
+        {
+            lastProcessedNotificationId = op.Notification.Identifier;
+            Debug.Log($"[Notif] Resume response — id={op.Notification.Identifier}, action={op.ActionId}");
+            ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
+        }
+
+        HandlePendingPuffsOnResume();
+    }
+#endif
+
+    private void HandlePendingPuffsOnResume()
+    {
+        if (pendingPuffsController != null && pendingPuffsController.IsPanelActive())
+            return;
+
+        if (pausePanel.activeSelf) return;
+        if (settingsPanel.activeSelf) return;
+        if (confirmResetPanel.activeSelf) return;
+        if (confirmResetProgressPanel != null && confirmResetProgressPanel.activeSelf) return;
+        if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) return;
+        if (overBudgetPanel != null && overBudgetPanel.activeSelf) return;
+        if (recoveryPanel != null && recoveryPanel.activeSelf) return;
+
+        RunCatchUp();
+
+        if (pendingPuffCount > 0 && pendingPuffsController != null)
+        {
+            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
+            return;
+        }
+
+        if (currentPuffIndex >= schedule.Count)
+        {
+            ShowFinishedState();
+            return;
+        }
+
+        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+        if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
+            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
+
+        CheckRecovery();
+        RefreshNotifications();
+        UpdateUI();
     }
 
     // ================================================================
