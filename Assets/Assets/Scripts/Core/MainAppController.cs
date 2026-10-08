@@ -224,7 +224,7 @@ public class MainAppController : MonoBehaviour
             lastProcessedNotificationId != op.Notification.Identifier)
         {
             lastProcessedNotificationId = op.Notification.Identifier;
-            Debug.Log($"[Notif] Startup response — id={op.Notification.Identifier}, action={op.ActionId}");
+            Debug.Log($"[Notif] Startup response - id={op.Notification.Identifier}, action={op.ActionId}");
             ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
         }
 
@@ -262,7 +262,7 @@ public class MainAppController : MonoBehaviour
 #endif
 
     // ================================================================
-    // CATCH-UP — decides how to handle past-due puffs
+    // CATCH-UP - decides how to handle past-due puffs
     // ================================================================
 
     void RunCatchUp()
@@ -280,7 +280,7 @@ public class MainAppController : MonoBehaviour
 
             if (sleepMode)
             {
-                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — sleep mode active.");
+                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped - sleep mode active.");
                 currentPuffIndex++;
                 continue;
             }
@@ -292,7 +292,7 @@ public class MainAppController : MonoBehaviour
 
             if (wasDuringPause)
             {
-                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped — inside pause window.");
+                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped - inside pause window.");
                 currentPuffIndex++;
                 continue;
             }
@@ -308,7 +308,7 @@ public class MainAppController : MonoBehaviour
 
     public void ResolveAllPending(bool smoked)
     {
-        Debug.Log($"[Pending] Resolving {pendingPuffCount} puffs — smoked={smoked}");
+        Debug.Log($"[Pending] Resolving {pendingPuffCount} puffs - smoked={smoked}");
 
         for (int i = 0; i < pendingPuffCount; i++)
         {
@@ -406,10 +406,10 @@ public class MainAppController : MonoBehaviour
 
             TimeSpan left = pauseEndTime.Value - now;
             if (left.TotalHours >= 1)
-                pauseStatusText.text = string.Format("Paused — {0:D2}:{1:D2}:{2:D2} left",
+                pauseStatusText.text = string.Format("Paused - {0:D2}:{1:D2}:{2:D2} left",
                     left.Hours, left.Minutes, left.Seconds);
             else
-                pauseStatusText.text = string.Format("Paused — {0:D2}:{1:D2} left",
+                pauseStatusText.text = string.Format("Paused - {0:D2}:{1:D2} left",
                     left.Minutes, left.Seconds);
             return;
         }
@@ -586,7 +586,7 @@ public class MainAppController : MonoBehaviour
 
     public void OnEarlyWakeNoClicked()
     {
-        Debug.Log("[Sleep] User declined early wake — staying in sleep mode.");
+        Debug.Log("[Sleep] User declined early wake - staying in sleep mode.");
         if (confirmEarlyWakePanel != null) confirmEarlyWakePanel.SetActive(false);
         if (sleepModePanel != null) sleepModePanel.SetActive(true);
     }
@@ -708,7 +708,7 @@ public class MainAppController : MonoBehaviour
 
         if (DateTime.Now.Ticks >= sleepTicks)
         {
-            Debug.Log("[ExtDay] Extended day ended — clearing state.");
+            Debug.Log("[ExtDay] Extended day ended - clearing state.");
             UserData.ExtendedDayDate = "";
             UserData.ExtendedDayBudget = -1;
             UserData.ExtendedDaySleepTicks = 0;
@@ -788,13 +788,13 @@ public class MainAppController : MonoBehaviour
         if (recoveryPanel != null)
         {
             recoveryPanel.SetActive(true);
-            Debug.Log($"[Recovery] Recent decline at {declinedAt:HH:mm} — showing recovery panel.");
+            Debug.Log($"[Recovery] Recent decline at {declinedAt:HH:mm} - showing recovery panel.");
         }
     }
 
     public void OnRecoveryYesClicked()
     {
-        Debug.Log("[Recovery] User says they DID smoke — correcting.");
+        Debug.Log("[Recovery] User says they DID smoke - correcting.");
         UserData.DeclinedPuffs = Mathf.Max(0, UserData.DeclinedPuffs - 1);
         UserData.LogPuffToday();
         UserData.LastDeclinedIndex = -1;
@@ -1030,7 +1030,7 @@ public class MainAppController : MonoBehaviour
             lastProcessedNotificationId != op.Notification.Identifier)
         {
             lastProcessedNotificationId = op.Notification.Identifier;
-            Debug.Log($"[Notif] Resume response — id={op.Notification.Identifier}, action={op.ActionId}");
+            Debug.Log($"[Notif] Resume response - id={op.Notification.Identifier}, action={op.ActionId}");
             ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
         }
 
@@ -1151,7 +1151,7 @@ public class MainAppController : MonoBehaviour
 
     void ConfirmResetProgress()
     {
-        Debug.Log("[Reset] Progress reset — regenerating schedule with current parameters.");
+        Debug.Log("[Reset] Progress reset - regenerating schedule with current parameters.");
         NotificationScheduler.CancelAll();
         UserData.ResetProgress();
         TaperEngine.GenerateAndSaveSchedule();
@@ -1160,7 +1160,7 @@ public class MainAppController : MonoBehaviour
 
     void ConfirmReset()
     {
-        Debug.Log("Resetting app — wiping all data.");
+        Debug.Log("Resetting app - wiping all data.");
         NotificationScheduler.CancelAll();
         UserData.ResetAll();
         SceneManager.LoadScene("Onboarding");

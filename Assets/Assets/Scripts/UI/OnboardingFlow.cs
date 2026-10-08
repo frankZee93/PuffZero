@@ -71,17 +71,17 @@ public class OnboardingFlow : MonoBehaviour
         switch (index)
         {
             case 0: // Wake hour
-                if (v < 0 || v > 23) { ShowError("Hour must be 0–23."); return false; }
+                if (v < 0 || v > 23) { ShowError("Hour must be 0-23."); return false; }
                 break;
             case 1: // Wake minute
-                if (v < 0 || v > 59) { ShowError("Minute must be 0–59."); return false; }
-                // After wake minute, we have both wake H and M — but sleep not yet set.
+                if (v < 0 || v > 59) { ShowError("Minute must be 0-59."); return false; }
+                // After wake minute, we have both wake H and M - but sleep not yet set.
                 break;
             case 2: // Sleep hour
-                if (v < 0 || v > 23) { ShowError("Hour must be 0–23."); return false; }
+                if (v < 0 || v > 23) { ShowError("Hour must be 0-23."); return false; }
                 break;
-            case 3: // Sleep minute — validate the whole awake window now
-                if (v < 0 || v > 59) { ShowError("Minute must be 0–59."); return false; }
+            case 3: // Sleep minute - validate the whole awake window now
+                if (v < 0 || v > 59) { ShowError("Minute must be 0-59."); return false; }
                 if (!ValidateAwakeWindow()) return false;
                 break;
             case 4: // Puffs per day
