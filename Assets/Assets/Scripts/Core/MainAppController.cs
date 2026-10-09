@@ -129,7 +129,6 @@ public class MainAppController : MonoBehaviour
 
         currentPuffIndex = UserData.CurrentPuffIndex;
 
-        // Wire all buttons
         smokeButton.onClick.AddListener(OnSmokeButtonClicked);
         skipButton.onClick.AddListener(OnSkipButtonClicked);
         pauseButton.onClick.AddListener(OpenPauseMenu);
@@ -231,8 +230,6 @@ public class MainAppController : MonoBehaviour
         RunStartupCatchUp();
     }
 
-    // Applies a notification answer to the schedule, advancing past every
-    // puff up to and including the one that was answered.
     private void ApplyNotificationAnswer(string identifier, string actionId)
     {
         if (string.IsNullOrEmpty(identifier) || !identifier.StartsWith("puff_")) return;
@@ -262,7 +259,7 @@ public class MainAppController : MonoBehaviour
 #endif
 
     // ================================================================
-    // CATCH-UP - decides how to handle past-due puffs
+    // CATCH-UP
     // ================================================================
 
     void RunCatchUp()
@@ -306,19 +303,23 @@ public class MainAppController : MonoBehaviour
         UserData.Save();
     }
 
-    public void ResolveAllPending(bool smoked)
+    public void ResolvePendingSplit(int smoked, int declined)
     {
-        Debug.Log($"[Pending] Resolving {pendingPuffCount} puffs - smoked={smoked}");
+        if (smoked < 0) smoked = 0;
+        if (declined < 0) declined = 0;
 
-        for (int i = 0; i < pendingPuffCount; i++)
-        {
-            if (smoked) UserData.LogPuffToday();
-            else UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-        }
+        int total = smoked + declined;
+        Debug.Log($"[Pending] Resolving {total} puffs - smoked={smoked}, declined={declined} (expected {pendingPuffCount})");
 
-        if (!smoked)
-            consecutiveMisses += pendingPuffCount;
-        else
+        for (int i = 0; i < smoked; i++)
+            UserData.LogPuffToday();
+
+        for (int i = 0; i < declined; i++)
+            UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
+
+        if (declined > 0)
+            consecutiveMisses += declined;
+        if (smoked > 0)
             consecutiveMisses = 0;
 
         pendingPuffCount = 0;
@@ -346,6 +347,12 @@ public class MainAppController : MonoBehaviour
         RefreshNotifications();
         CheckRecovery();
         UpdateUI();
+    }
+
+    public void OpenCalendarForIndividualAccounting()
+    {
+        // Placeholder - full implementation with item 3 (calendar day-list view).
+        Debug.Log("[Pending] Individual accounting requested. Calendar day-list view not yet built.");
     }
 
     // ================================================================
