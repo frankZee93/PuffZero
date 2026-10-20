@@ -1181,7 +1181,7 @@ public class MainAppController : MonoBehaviour
             lastProcessedNotificationId != op.Notification.Identifier)
         {
             lastProcessedNotificationId = op.Notification.Identifier;
-            ApplyNotificationAnswer(op.Notification.Identifier, op.Notification.ActionId);
+            ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
         }
 
         HandlePendingPuffsOnResume();
