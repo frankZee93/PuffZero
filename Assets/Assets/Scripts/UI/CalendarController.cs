@@ -16,10 +16,15 @@ public class CalendarController : MonoBehaviour
     public GameObject dayCellPrefab;
     public Transform gridParent;
 
+    [Header("Day List")]
+    public DayListController dayListController;
+
     [Header("Colors")]
     public Color emptyDayColor = new Color(1f, 1f, 1f, 0.10f);
     public Color activeDayColor = new Color(1f, 1f, 1f, 0.30f);
     public Color todayColor = new Color(0.25f, 0.55f, 1f, 0.55f);
+
+    public Action OnClosed;
 
     private DateTime displayedMonth;
     private readonly List<GameObject> spawnedCells = new List<GameObject>();
@@ -46,51 +51,35 @@ public class CalendarController : MonoBehaviour
     public void CloseCalendar()
     {
         calendarPanel.SetActive(false);
+        OnClosed?.Invoke();
     }
 
-    void PrevMonth()
-    {
-        displayedMonth = displayedMonth.AddMonths(-1);
-        RefreshCalendar();
-    }
-
-    void NextMonth()
-    {
-        displayedMonth = displayedMonth.AddMonths(1);
-        RefreshCalendar();
-    }
+    void PrevMonth() { displayedMonth = displayedMonth.AddMonths(-1); RefreshCalendar(); }
+    void NextMonth() { displayedMonth = displayedMonth.AddMonths(1); RefreshCalendar(); }
 
     void RefreshCalendar()
     {
         if (monthYearText != null)
             monthYearText.text = displayedMonth.ToString("MMMM yyyy");
 
-        // Clear previously spawned cells
         foreach (var cell in spawnedCells)
             if (cell != null) Destroy(cell);
         spawnedCells.Clear();
 
-        // Monday = 0, Sunday = 6
         int firstWeekday = ((int)displayedMonth.DayOfWeek + 6) % 7;
         int daysInMonth = DateTime.DaysInMonth(displayedMonth.Year, displayedMonth.Month);
 
-        // Leading empty cells
-        for (int i = 0; i < firstWeekday; i++)
-            SpawnCell(null);
-
-        // Day cells
+        for (int i = 0; i < firstWeekday; i++) SpawnCell(null);
         for (int day = 1; day <= daysInMonth; day++)
         {
             DateTime date = new DateTime(displayedMonth.Year, displayedMonth.Month, day);
             SpawnCell(date);
         }
 
-        // Trailing empty cells
         int totalCells = firstWeekday + daysInMonth;
         int remainder = totalCells % 7;
         if (remainder != 0)
-            for (int i = 0; i < (7 - remainder); i++)
-                SpawnCell(null);
+            for (int i = 0; i < (7 - remainder); i++) SpawnCell(null);
     }
 
     void SpawnCell(DateTime? date)
@@ -114,11 +103,16 @@ public class CalendarController : MonoBehaviour
 
             if (bg != null)
             {
-                if (date.Value.Date == today)
-                    bg.color = todayColor;
-                else
-                    bg.color = activeDayColor;
+                if (date.Value.Date == today) bg.color = todayColor;
+                else bg.color = activeDayColor;
             }
+
+            var btn = cell.GetComponent<Button>();
+            if (btn == null) btn = cell.AddComponent<Button>();
+            if (btn.targetGraphic == null && bg != null) btn.targetGraphic = bg;
+            btn.onClick.RemoveAllListeners();
+            DateTime capturedDate = date.Value;
+            btn.onClick.AddListener(() => OnDayCellClicked(capturedDate));
         }
         else
         {
@@ -126,5 +120,14 @@ public class CalendarController : MonoBehaviour
             if (countText != null) countText.text = "";
             if (bg != null) bg.color = emptyDayColor;
         }
+    }
+
+    void OnDayCellClicked(DateTime date)
+    {
+        if (calendarPanel != null) calendarPanel.SetActive(false);
+        if (dayListController != null)
+            dayListController.OpenForDate(date);
+        else
+            Debug.LogWarning("[Calendar] DayListController not wired.");
     }
 }

@@ -32,11 +32,25 @@ public class PendingPuffsController : MonoBehaviour
         pendingText.text = $"You have {pendingCount} unaccounted-for puff{(pendingCount == 1 ? "" : "s")}. " +
                            $"How many did you smoke?";
 
-        // Default the slider to 0 smoked / all declined - the conservative choice.
         puffSlider.value = 0;
         OnSliderChanged(0);
 
         pendingPanel.SetActive(true);
+    }
+
+    public void RefreshCount(int count)
+    {
+        if (count == pendingCount) return;
+        pendingCount = count;
+        pendingText.text = $"You have {pendingCount} unaccounted-for puff{(pendingCount == 1 ? "" : "s")}. " +
+                           $"How many did you smoke?";
+        OnSliderChanged(puffSlider.value);
+    }
+
+    public void HidePanel()
+    {
+        if (pendingPanel != null && pendingPanel.activeSelf)
+            pendingPanel.SetActive(false);
     }
 
     public bool IsPanelActive()

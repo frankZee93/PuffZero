@@ -2,6 +2,15 @@ using UnityEngine;
 using System;
 using System.Collections.Generic;
 
+public enum PuffStatus { Smoked = 0, Skipped = 1, Erased = 2 }
+
+public struct PuffRecord
+{
+    public long ScheduledTicks;
+    public PuffStatus Status;
+    public long ResolvedTicks;
+}
+
 public static class UserData
 {
     private const string KEY_WAKE_HOUR = "pz_wake_hour";
@@ -26,39 +35,43 @@ public static class UserData
     private const string KEY_EXT_SLEEP_TICKS = "pz_ext_sleep_ticks";
     private const string KEY_LAST_DECLINED_TICKS = "pz_last_declined_ticks";
     private const string KEY_LAST_DECLINED_INDEX = "pz_last_declined_index";
+    private const string KEY_WOKE_EARLY_TODAY = "pz_woke_early_today";
+    private const string KEY_IDEAL_PANEL_SHOWN_TODAY = "pz_ideal_panel_shown_today";
+    private const string KEY_PRE_END_DAY_INDEX = "pz_pre_end_day_index";
+    private const string KEY_PRE_END_DAY_TICKS = "pz_pre_end_day_ticks";
     private const string LOG_KEY_PREFIX = "pz_log_";
+    private const string PUFF_RECORDS_PREFIX = "pz_puffs_";
 
-    // --- Wake / Sleep ---
+    private static List<long> _scheduleCache = null;
+    private static readonly Dictionary<DateTime, List<PuffRecord>> _recordsCache = new Dictionary<DateTime, List<PuffRecord>>();
+
     public static int WakeHour { get => PlayerPrefs.GetInt(KEY_WAKE_HOUR, 7); set => PlayerPrefs.SetInt(KEY_WAKE_HOUR, value); }
     public static int WakeMinute { get => PlayerPrefs.GetInt(KEY_WAKE_MIN, 0); set => PlayerPrefs.SetInt(KEY_WAKE_MIN, value); }
     public static int SleepHour { get => PlayerPrefs.GetInt(KEY_SLEEP_HOUR, 23); set => PlayerPrefs.SetInt(KEY_SLEEP_HOUR, value); }
     public static int SleepMinute { get => PlayerPrefs.GetInt(KEY_SLEEP_MIN, 0); set => PlayerPrefs.SetInt(KEY_SLEEP_MIN, value); }
 
-    // --- Puffs per day ---
     public static int PuffsPerDay
     {
         get => PlayerPrefs.GetInt(KEY_PUFFS_PER_DAY, 20);
         set => PlayerPrefs.SetInt(KEY_PUFFS_PER_DAY, value);
     }
 
-    // --- Taper duration ---
     public static float TaperDays
     {
         get => PlayerPrefs.GetFloat(KEY_TAPER_DAYS, 90f);
         set => PlayerPrefs.SetFloat(KEY_TAPER_DAYS, value);
     }
 
-    // --- Onboarding flag ---
     public static bool Onboarded
     {
         get => PlayerPrefs.GetInt(KEY_ONBOARDED, 0) == 1;
         set => PlayerPrefs.SetInt(KEY_ONBOARDED, value ? 1 : 0);
     }
 
-    // --- Schedule ---
     public static void SaveSchedule(List<long> ticks)
     {
         PlayerPrefs.SetString(KEY_SCHEDULE, string.Join(",", ticks));
+        _scheduleCache = ticks;
         CurrentPuffIndex = 0;
         DeclinedPuffs = 0;
     }
@@ -66,19 +79,32 @@ public static class UserData
     public static void SaveSchedulePreserveProgress(List<long> ticks)
     {
         PlayerPrefs.SetString(KEY_SCHEDULE, string.Join(",", ticks));
+        _scheduleCache = ticks;
     }
 
     public static List<long> LoadSchedule()
     {
+        if (_scheduleCache != null) return _scheduleCache;
+
         var result = new List<long>();
         string raw = PlayerPrefs.GetString(KEY_SCHEDULE, "");
-        if (string.IsNullOrEmpty(raw)) return result;
+        if (string.IsNullOrEmpty(raw))
+        {
+            _scheduleCache = result;
+            return result;
+        }
         foreach (var s in raw.Split(','))
             if (long.TryParse(s, out long t)) result.Add(t);
+
+        _scheduleCache = result;
         return result;
     }
 
-    // --- Schedule progress ---
+    public static void InvalidateScheduleCache()
+    {
+        _scheduleCache = null;
+    }
+
     public static int CurrentPuffIndex
     {
         get => PlayerPrefs.GetInt(KEY_PUFF_INDEX, 0);
@@ -91,14 +117,12 @@ public static class UserData
         set => PlayerPrefs.SetInt(KEY_DECLINED_TOTAL, value);
     }
 
-    // --- Timezone offset at generation time ---
     public static int ScheduleGenOffsetMinutes
     {
         get => PlayerPrefs.GetInt(KEY_GEN_OFFSET, 0);
         set => PlayerPrefs.SetInt(KEY_GEN_OFFSET, value);
     }
 
-    // --- Pause state ---
     public static DateTime? PauseEndTime
     {
         get
@@ -133,7 +157,6 @@ public static class UserData
         }
     }
 
-    // --- Sleep mode state ---
     public static bool SleepModeActive
     {
         get => PlayerPrefs.GetInt(KEY_SLEEP_MODE_ACTIVE, 0) == 1;
@@ -174,7 +197,6 @@ public static class UserData
         }
     }
 
-    // --- Extended-day / over-budget state ---
     public static int ExtendedDayBudget
     {
         get => PlayerPrefs.GetInt(KEY_EXT_BUDGET, -1);
@@ -199,21 +221,42 @@ public static class UserData
         set => PlayerPrefs.SetString(KEY_EXT_SLEEP_TICKS, value.ToString());
     }
 
-    // --- Recent decline recovery ---
     public static long LastDeclinedAtTicks
     {
         get => long.Parse(PlayerPrefs.GetString(KEY_LAST_DECLINED_TICKS, "0"));
         set => PlayerPrefs.SetString(KEY_LAST_DECLINED_TICKS, value.ToString());
     }
 
-    // -1 = nothing to recover
     public static int LastDeclinedIndex
     {
         get => PlayerPrefs.GetInt(KEY_LAST_DECLINED_INDEX, -1);
         set => PlayerPrefs.SetInt(KEY_LAST_DECLINED_INDEX, value);
     }
 
-    // --- Puff log (per day) ---
+    public static bool WokeEarlyToday
+    {
+        get => PlayerPrefs.GetInt(KEY_WOKE_EARLY_TODAY, 0) == 1;
+        set => PlayerPrefs.SetInt(KEY_WOKE_EARLY_TODAY, value ? 1 : 0);
+    }
+
+    public static bool IdealPanelShownToday
+    {
+        get => PlayerPrefs.GetInt(KEY_IDEAL_PANEL_SHOWN_TODAY, 0) == 1;
+        set => PlayerPrefs.SetInt(KEY_IDEAL_PANEL_SHOWN_TODAY, value ? 1 : 0);
+    }
+
+    public static int PreEndDayIndex
+    {
+        get => PlayerPrefs.GetInt(KEY_PRE_END_DAY_INDEX, -1);
+        set => PlayerPrefs.SetInt(KEY_PRE_END_DAY_INDEX, value);
+    }
+
+    public static long PreEndDayTicks
+    {
+        get => long.Parse(PlayerPrefs.GetString(KEY_PRE_END_DAY_TICKS, "0"));
+        set => PlayerPrefs.SetString(KEY_PRE_END_DAY_TICKS, value.ToString());
+    }
+
     private static string LogKey(DateTime date) => LOG_KEY_PREFIX + date.ToString("yyyy-MM-dd");
 
     public static void LogPuffToday()
@@ -229,17 +272,154 @@ public static class UserData
         return PlayerPrefs.GetInt(LogKey(date), 0);
     }
 
+    public static void SetPuffsForDate(DateTime date, int count)
+    {
+        if (count < 0) count = 0;
+        string key = LogKey(date);
+        PlayerPrefs.SetInt(key, count);
+        PlayerPrefs.Save();
+    }
+
+    private static string PuffRecordsKey(DateTime date) => PUFF_RECORDS_PREFIX + date.ToString("yyyy-MM-dd");
+
+    public static void RecordPuffResolution(long scheduledTicks, PuffStatus status, long resolvedTicks = 0)
+    {
+        if (resolvedTicks == 0) resolvedTicks = DateTime.Now.Ticks;
+
+        DateTime date = new DateTime(scheduledTicks).Date;
+        string key = PuffRecordsKey(date);
+        string raw = PlayerPrefs.GetString(key, "");
+
+        var entries = new List<PuffRecord>();
+        if (!string.IsNullOrEmpty(raw))
+        {
+            foreach (var part in raw.Split('|'))
+            {
+                if (string.IsNullOrEmpty(part)) continue;
+                var fields = part.Split(':');
+                if (fields.Length != 3) continue;
+                if (!long.TryParse(fields[0], out long st)) continue;
+                if (!int.TryParse(fields[1], out int stt)) continue;
+                if (!long.TryParse(fields[2], out long rt)) continue;
+                entries.Add(new PuffRecord { ScheduledTicks = st, Status = (PuffStatus)stt, ResolvedTicks = rt });
+            }
+        }
+
+        bool replaced = false;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (entries[i].ScheduledTicks == scheduledTicks)
+            {
+                entries[i] = new PuffRecord { ScheduledTicks = scheduledTicks, Status = status, ResolvedTicks = resolvedTicks };
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced)
+            entries.Add(new PuffRecord { ScheduledTicks = scheduledTicks, Status = status, ResolvedTicks = resolvedTicks });
+
+        var parts = new List<string>(entries.Count);
+        foreach (var e in entries)
+            parts.Add($"{e.ScheduledTicks}:{(int)e.Status}:{e.ResolvedTicks}");
+
+        PlayerPrefs.SetString(key, string.Join("|", parts));
+        PlayerPrefs.Save();
+
+        _recordsCache[date] = entries;
+    }
+
+    public static List<PuffRecord> GetPuffRecordsForDate(DateTime date)
+    {
+        date = date.Date;
+        if (_recordsCache.TryGetValue(date, out var cached)) return cached;
+
+        var result = new List<PuffRecord>();
+        string raw = PlayerPrefs.GetString(PuffRecordsKey(date), "");
+        if (!string.IsNullOrEmpty(raw))
+        {
+            foreach (var part in raw.Split('|'))
+            {
+                if (string.IsNullOrEmpty(part)) continue;
+                var fields = part.Split(':');
+                if (fields.Length != 3) continue;
+                if (!long.TryParse(fields[0], out long st)) continue;
+                if (!int.TryParse(fields[1], out int stt)) continue;
+                if (!long.TryParse(fields[2], out long rt)) continue;
+                result.Add(new PuffRecord { ScheduledTicks = st, Status = (PuffStatus)stt, ResolvedTicks = rt });
+            }
+        }
+
+        _recordsCache[date] = result;
+        return result;
+    }
+
+    public static PuffRecord? GetPuffRecord(long scheduledTicks)
+    {
+        var all = GetPuffRecordsForDate(new DateTime(scheduledTicks).Date);
+        foreach (var r in all)
+            if (r.ScheduledTicks == scheduledTicks) return r;
+        return null;
+    }
+
+    public static void DeletePuffRecord(long scheduledTicks)
+    {
+        DateTime date = new DateTime(scheduledTicks).Date;
+        string key = PuffRecordsKey(date);
+        string raw = PlayerPrefs.GetString(key, "");
+        if (string.IsNullOrEmpty(raw)) return;
+
+        var parts = new List<string>();
+        foreach (var part in raw.Split('|'))
+        {
+            if (string.IsNullOrEmpty(part)) continue;
+            var fields = part.Split(':');
+            if (fields.Length != 3) continue;
+            if (!long.TryParse(fields[0], out long st)) continue;
+            if (st == scheduledTicks) continue;
+            parts.Add(part);
+        }
+        PlayerPrefs.SetString(key, string.Join("|", parts));
+        PlayerPrefs.Save();
+
+        _recordsCache.Remove(date);
+    }
+
+    // Change the status of an existing puff record and adjust the counters
+    // that back the calendar / ideal panel. No-op if the record doesn't
+    // exist or the new status matches the current one.
+    public static void ChangePuffStatus(long scheduledTicks, PuffStatus newStatus)
+    {
+        var existing = GetPuffRecord(scheduledTicks);
+        if (!existing.HasValue) return;
+        if (existing.Value.Status == newStatus) return;
+
+        var oldStatus = existing.Value.Status;
+        DateTime date = new DateTime(scheduledTicks).Date;
+
+        if (oldStatus == PuffStatus.Smoked)
+            SetPuffsForDate(date, GetPuffsForDate(date) - 1);
+        else if (oldStatus == PuffStatus.Skipped)
+            DeclinedPuffs = Mathf.Max(0, DeclinedPuffs - 1);
+
+        if (newStatus == PuffStatus.Smoked)
+            SetPuffsForDate(date, GetPuffsForDate(date) + 1);
+        else if (newStatus == PuffStatus.Skipped)
+            DeclinedPuffs = DeclinedPuffs + 1;
+
+        RecordPuffResolution(scheduledTicks, newStatus);
+    }
+
     public static void Save() => PlayerPrefs.Save();
 
-    // --- Full wipe ---
     public static void ResetAll()
     {
         PlayerPrefs.DeleteAll();
         PlayerPrefs.Save();
-        Debug.Log("[UserData] Full wipe — all data cleared.");
+        _scheduleCache = null;
+        _recordsCache.Clear();
+        Debug.Log("[UserData] Full wipe - all data cleared.");
     }
 
-    // --- Progress reset: clears schedule state, preserves calendar + parameters ---
     public static void ResetProgress()
     {
         PlayerPrefs.DeleteKey(KEY_SCHEDULE);
@@ -256,11 +436,15 @@ public static class UserData
         PlayerPrefs.DeleteKey(KEY_EXT_SLEEP_TICKS);
         PlayerPrefs.DeleteKey(KEY_LAST_DECLINED_TICKS);
         PlayerPrefs.DeleteKey(KEY_LAST_DECLINED_INDEX);
+        PlayerPrefs.DeleteKey(KEY_WOKE_EARLY_TODAY);
+        PlayerPrefs.DeleteKey(KEY_IDEAL_PANEL_SHOWN_TODAY);
+        PlayerPrefs.DeleteKey(KEY_PRE_END_DAY_INDEX);
+        PlayerPrefs.DeleteKey(KEY_PRE_END_DAY_TICKS);
         PlayerPrefs.Save();
-        Debug.Log("[UserData] Progress reset — calendar and onboarding parameters preserved.");
+        _scheduleCache = null;
+        Debug.Log("[UserData] Progress reset - calendar and onboarding parameters preserved.");
     }
 
-    // --- Helpers ---
     public static int AwakeMinutes
     {
         get

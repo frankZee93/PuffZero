@@ -15,7 +15,6 @@ public class MainAppController : MonoBehaviour
     [Header("UI Panels")]
     public GameObject waitingPanel;
     public GameObject smokePromptPanel;
-    public GameObject finishedPanel;
     public GameObject pausePanel;
     public GameObject menuPanel;
     public GameObject activePausePanel;
@@ -26,6 +25,28 @@ public class MainAppController : MonoBehaviour
     public GameObject overBudgetPanel;
     public GameObject confirmResetProgressPanel;
     public GameObject recoveryPanel;
+    public GameObject dayListPanel;
+    public TaperCompletePanel taperCompletePanel;
+
+    [Header("Controllers")]
+    public CalendarController calendarController;
+
+    [Header("Unaccounted Before End/Pause")]
+    public GameObject unaccountedPromptPanel;
+    public TMP_Text unaccountedPromptTitle;
+    public Button accountUnaccountedButton;
+    public Button forgetUnaccountedButton;
+
+    [Header("Pause Resume Prompt")]
+    public GameObject pauseResumePromptPanel;
+    public Button stillMyDayButton;
+    public Button endOfDayFromPauseButton;
+
+    [Header("Ideal Number Panel")]
+    public GameObject idealNumberPanel;
+    public Button keepSmokingButton;
+    public Button stopForDayButton;
+    public Button reduceFrequencyButton;
 
     [Header("UI Text")]
     public TMP_Text statusText;
@@ -63,11 +84,15 @@ public class MainAppController : MonoBehaviour
 
     [Header("Pause Settings")]
     public TMP_InputField pauseHoursInput;
+    public ScrollPicker pickerManager;
 
-    private const int PUFF_EXPIRY_MINUTES = 20;
-    private const int CONSECUTIVE_MISSES_FOR_AUTO_SLEEP = 5;
-    private const int CONSECUTIVE_MISSES_HARD_OVERRIDE = 10;
     private const int SLEEP_MODE_MAX_HOURS = 24;
+    private const float LONG_PAUSE_HOURS = 4f;
+    private const float END_DAY_RECOVERY_HOURS = 4f;
+
+    private const int PICKER_HOURS_MAX = 12;
+    private const int PICKER_MINUTE_STEP = 5;
+    private const int PICKER_MINUTE_STEPS = 12;
 
     [Header("Audio")]
     public AudioSource notificationSound;
@@ -76,27 +101,28 @@ public class MainAppController : MonoBehaviour
     private int currentPuffIndex = 0;
     private DateTime nextPuffTime;
     private bool isInitialized = false;
+    private bool celebrationActive = false;
 
     private bool sleepMode = false;
-    private int consecutiveMisses = 0;
-    private DateTime? smokePromptShownAt = null;
 
     private DateTime? pauseEndTime = null;
     private bool IsPaused => pauseEndTime.HasValue;
 
-    // Count of past-due puffs awaiting the user's single cumulative decision.
-    private int pendingPuffCount = 0;
+    private enum DeferredAction { None, EndDay, Pause }
+    private DeferredAction deferredAction = DeferredAction.None;
+
+    private int pendingPauseHours = 1;
+    private int pendingPauseMinutes = 0;
 
 #if UNITY_IOS
     private string lastProcessedNotificationId = null;
 #endif
 
-    // ================================================================
-    // LIFECYCLE
-    // ================================================================
-
     void Start()
     {
+        if (taperCompletePanel != null && taperCompletePanel.panelRoot != null)
+            taperCompletePanel.panelRoot.SetActive(false);
+
         schedule = UserData.LoadSchedule();
 
         if (schedule == null || schedule.Count == 0)
@@ -105,18 +131,27 @@ public class MainAppController : MonoBehaviour
             return;
         }
 
+        if (calendarController != null)
+            calendarController.OnClosed += OnCalendarClosed;
+
         pauseEndTime = UserData.PauseEndTime;
-        if (pauseEndTime.HasValue && DateTime.Now >= pauseEndTime.Value)
+        if (pauseEndTime.HasValue && TimeService.Now >= pauseEndTime.Value)
         {
+            bool needsPrompt = WasPauseLongOrCrossedSleep(UserData.PauseStartTime, TimeService.Now);
             pauseEndTime = null;
             UserData.PauseEndTime = null;
             UserData.PauseStartTime = null;
+            if (needsPrompt)
+            {
+                Debug.Log("[Pause] Expired while closed, showing resume prompt.");
+                ShowPauseResumePrompt();
+            }
         }
 
         sleepMode = UserData.SleepModeActive;
         if (sleepMode && UserData.SleepModeStartedAt.HasValue)
         {
-            TimeSpan activeFor = DateTime.Now - UserData.SleepModeStartedAt.Value;
+            TimeSpan activeFor = TimeService.Now - UserData.SleepModeStartedAt.Value;
             if (activeFor.TotalHours >= SLEEP_MODE_MAX_HOURS)
             {
                 Debug.Log("[Sleep] 24h timeout. Auto-exiting sleep mode.");
@@ -132,7 +167,7 @@ public class MainAppController : MonoBehaviour
         smokeButton.onClick.AddListener(OnSmokeButtonClicked);
         skipButton.onClick.AddListener(OnSkipButtonClicked);
         pauseButton.onClick.AddListener(OpenPauseMenu);
-        confirmPauseButton.onClick.AddListener(ConfirmPause);
+        if (confirmPauseButton != null) confirmPauseButton.onClick.AddListener(ConfirmPause);
         cancelPauseButton.onClick.AddListener(CancelPause);
         endPauseButton.onClick.AddListener(EndPause);
 
@@ -164,6 +199,27 @@ public class MainAppController : MonoBehaviour
         if (recoveryYesButton != null) recoveryYesButton.onClick.AddListener(OnRecoveryYesClicked);
         if (recoveryNoButton != null) recoveryNoButton.onClick.AddListener(OnRecoveryNoClicked);
 
+        if (accountUnaccountedButton != null)
+            accountUnaccountedButton.onClick.AddListener(OnAccountUnaccountedClicked);
+        if (forgetUnaccountedButton != null)
+            forgetUnaccountedButton.onClick.AddListener(OnForgetUnaccountedClicked);
+
+        if (stillMyDayButton != null)
+            stillMyDayButton.onClick.AddListener(OnStillMyDayClicked);
+        if (endOfDayFromPauseButton != null)
+            endOfDayFromPauseButton.onClick.AddListener(OnEndOfDayFromPauseClicked);
+
+        if (keepSmokingButton != null)
+            keepSmokingButton.onClick.AddListener(OnKeepSmokingClicked);
+        if (stopForDayButton != null)
+            stopForDayButton.onClick.AddListener(OnStopForDayClicked);
+        if (reduceFrequencyButton != null)
+            reduceFrequencyButton.onClick.AddListener(OnReduceFrequencyClicked);
+
+        if (unaccountedPromptPanel != null) unaccountedPromptPanel.SetActive(false);
+        if (pauseResumePromptPanel != null) pauseResumePromptPanel.SetActive(false);
+        if (idealNumberPanel != null) idealNumberPanel.SetActive(false);
+
         isInitialized = true;
 
 #if UNITY_IOS
@@ -173,14 +229,11 @@ public class MainAppController : MonoBehaviour
 #endif
     }
 
-    // ================================================================
-    // STARTUP / RESUME ROUTINES
-    // ================================================================
-
     private void RunStartupCatchUp()
     {
+        TryRecoverFromEndDay();
+        ReconcileCurrentIndexFromRecords();
         RunCatchUp();
-        CheckAutoSleepTrigger();
         ValidateExtendedDay();
 
         if (currentPuffIndex >= schedule.Count)
@@ -191,23 +244,9 @@ public class MainAppController : MonoBehaviour
 
         nextPuffTime = new DateTime(schedule[currentPuffIndex]);
         if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
-        {
             nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
-            Debug.Log($"[MainApp] Next puff pushed out of sleep window -> {nextPuffTime}");
-        }
 
-        if (pendingPuffCount > 0 && pendingPuffsController != null)
-        {
-            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
-        }
-        else
-        {
-            CheckRecovery();
-        }
-
-        if (!IsPaused && !sleepMode && pendingPuffCount == 0)
-            RefreshNotifications();
-
+        RefreshNotifications();
         UpdateUI();
     }
 
@@ -234,73 +273,143 @@ public class MainAppController : MonoBehaviour
     {
         if (string.IsNullOrEmpty(identifier) || !identifier.StartsWith("puff_")) return;
 
-        int answeredIndex = -1;
-        if (!int.TryParse(identifier.Substring(5), out answeredIndex)) return;
-        if (answeredIndex < 0) return;
+        long answeredTicks;
+        if (!long.TryParse(identifier.Substring(5), out answeredTicks)) return;
 
-        while (currentPuffIndex <= answeredIndex && currentPuffIndex < schedule.Count)
-            currentPuffIndex++;
-        UserData.CurrentPuffIndex = currentPuffIndex;
+        int answeredIndex = -1;
+        for (int i = 0; i < schedule.Count; i++)
+        {
+            if (schedule[i] == answeredTicks) { answeredIndex = i; break; }
+        }
+
+        if (answeredIndex < 0 || answeredIndex < currentPuffIndex)
+        {
+            Debug.Log($"[Notif] Stale answer discarded (id={identifier}).");
+            return;
+        }
 
         if (actionId == NotificationScheduler.ActionSmokedId)
         {
             UserData.LogPuffToday();
-            consecutiveMisses = 0;
+            UserData.RecordPuffResolution(answeredTicks, PuffStatus.Smoked);
         }
         else if (actionId == NotificationScheduler.ActionSkipId)
         {
             UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-            consecutiveMisses++;
+            UserData.RecordPuffResolution(answeredTicks, PuffStatus.Skipped);
         }
 
-        smokePromptShownAt = null;
+        currentPuffIndex = answeredIndex + 1;
+        UserData.CurrentPuffIndex = currentPuffIndex;
         UserData.Save();
+
+        ReconcileCurrentIndexFromRecords();
     }
 #endif
 
-    // ================================================================
-    // CATCH-UP
-    // ================================================================
-
     void RunCatchUp()
     {
-        DateTime now = DateTime.Now;
-        DateTime? pauseStart = UserData.PauseStartTime;
-        DateTime? pauseEnd = pauseEndTime;
-
-        pendingPuffCount = 0;
-
-        while (currentPuffIndex < schedule.Count &&
-               new DateTime(schedule[currentPuffIndex]) <= now)
-        {
-            DateTime puffTime = new DateTime(schedule[currentPuffIndex]);
-
-            if (sleepMode)
-            {
-                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped - sleep mode active.");
-                currentPuffIndex++;
-                continue;
-            }
-
-            bool wasDuringPause = pauseStart.HasValue &&
-                                  pauseEnd.HasValue &&
-                                  puffTime >= pauseStart.Value &&
-                                  puffTime <= pauseEnd.Value;
-
-            if (wasDuringPause)
-            {
-                Debug.Log($"Puff {currentPuffIndex} at {puffTime} skipped - inside pause window.");
-                currentPuffIndex++;
-                continue;
-            }
-
-            Debug.Log($"Puff {currentPuffIndex} at {puffTime} is pending user decision.");
-            pendingPuffCount++;
-            currentPuffIndex++;
-        }
-
         UserData.CurrentPuffIndex = currentPuffIndex;
         UserData.Save();
+    }
+
+    private int GetOverdueCount()
+    {
+        if (schedule == null || currentPuffIndex >= schedule.Count) return 0;
+        DateTime now = TimeService.Now;
+        int count = 0;
+        for (int i = currentPuffIndex; i < schedule.Count; i++)
+        {
+            if (new DateTime(schedule[i]) <= now)
+            {
+                var rec = UserData.GetPuffRecord(schedule[i]);
+                if (!rec.HasValue) count++;
+            }
+            else break;
+        }
+        return count;
+    }
+
+    private void MarkPuffsErased(int fromIndex, int toIndexExclusive)
+    {
+        if (schedule == null) return;
+        if (fromIndex < 0) fromIndex = 0;
+        if (toIndexExclusive > schedule.Count) toIndexExclusive = schedule.Count;
+
+        for (int i = fromIndex; i < toIndexExclusive; i++)
+            UserData.RecordPuffResolution(schedule[i], PuffStatus.Erased);
+    }
+
+    private void ReconcileCurrentIndexFromRecords()
+    {
+        if (schedule == null || schedule.Count == 0) return;
+        if (currentPuffIndex >= schedule.Count) return;
+
+        int newIndex = currentPuffIndex;
+        while (newIndex < schedule.Count)
+        {
+            var rec = UserData.GetPuffRecord(schedule[newIndex]);
+            if (rec.HasValue) newIndex++;
+            else break;
+        }
+
+        if (newIndex != currentPuffIndex)
+        {
+            currentPuffIndex = newIndex;
+            UserData.CurrentPuffIndex = currentPuffIndex;
+            UserData.Save();
+        }
+
+        if (currentPuffIndex < schedule.Count)
+        {
+            nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+            if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
+                nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
+        }
+    }
+
+    private void ErasePuffsInPauseWindow(DateTime pauseStart, DateTime pauseEnd)
+    {
+        if (schedule == null || schedule.Count == 0) return;
+        if (pauseStart >= pauseEnd) return;
+
+        long startTicks = pauseStart.Ticks;
+        long endTicks = pauseEnd.Ticks;
+
+        int erased = 0;
+        for (int i = 0; i < schedule.Count; i++)
+        {
+            long t = schedule[i];
+            if (t < startTicks) continue;
+            if (t > endTicks) break;
+
+            var rec = UserData.GetPuffRecord(t);
+            if (rec.HasValue) continue;
+
+            UserData.RecordPuffResolution(t, PuffStatus.Erased);
+            erased++;
+        }
+
+        if (erased > 0)
+            Debug.Log($"[Pause] Erased {erased} puffs inside pause window ({pauseStart:HH:mm} – {pauseEnd:HH:mm}).");
+
+        ReconcileCurrentIndexFromRecords();
+    }
+
+    public void OnPuffResolvedExternally()
+    {
+        if (!isInitialized) return;
+
+        ReconcileCurrentIndexFromRecords();
+
+        if (currentPuffIndex >= schedule.Count)
+        {
+            ShowFinishedState();
+            return;
+        }
+
+        RefreshNotifications();
+        UpdateUI();
     }
 
     public void ResolvePendingSplit(int smoked, int declined)
@@ -308,37 +417,58 @@ public class MainAppController : MonoBehaviour
         if (smoked < 0) smoked = 0;
         if (declined < 0) declined = 0;
 
+        int overdue = GetOverdueCount();
         int total = smoked + declined;
-        Debug.Log($"[Pending] Resolving {total} puffs - smoked={smoked}, declined={declined} (expected {pendingPuffCount})");
+        Debug.Log($"[Pending] Resolving {total} puffs - smoked={smoked}, declined={declined} (overdue={overdue})");
 
-        for (int i = 0; i < smoked; i++)
-            UserData.LogPuffToday();
+        for (int i = 0; i < smoked; i++) UserData.LogPuffToday();
+        for (int i = 0; i < declined; i++) UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
 
-        for (int i = 0; i < declined; i++)
-            UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
+        int toAdvance = Mathf.Min(total, overdue);
 
-        if (declined > 0)
-            consecutiveMisses += declined;
-        if (smoked > 0)
-            consecutiveMisses = 0;
-
-        pendingPuffCount = 0;
-        UserData.Save();
-
-        DateTime now = DateTime.Now;
-        while (currentPuffIndex < schedule.Count &&
-               new DateTime(schedule[currentPuffIndex]) <= now)
+        int smokedRemaining = smoked;
+        int declinedRemaining = declined;
+        for (int i = 0; i < toAdvance; i++)
         {
-            currentPuffIndex++;
+            long scheduledTicks = schedule[currentPuffIndex + i];
+            if (smokedRemaining > 0)
+            {
+                UserData.RecordPuffResolution(scheduledTicks, PuffStatus.Smoked);
+                smokedRemaining--;
+            }
+            else if (declinedRemaining > 0)
+            {
+                UserData.RecordPuffResolution(scheduledTicks, PuffStatus.Skipped);
+                declinedRemaining--;
+            }
+            else
+            {
+                UserData.RecordPuffResolution(scheduledTicks, PuffStatus.Erased);
+            }
         }
+
+        currentPuffIndex += toAdvance;
+        if (currentPuffIndex > schedule.Count) currentPuffIndex = schedule.Count;
         UserData.CurrentPuffIndex = currentPuffIndex;
         UserData.Save();
 
-        if (currentPuffIndex >= schedule.Count)
+        ReconcileCurrentIndexFromRecords();
+
+        if (deferredAction != DeferredAction.None)
         {
-            ShowFinishedState();
-            return;
+            var action = deferredAction;
+            deferredAction = DeferredAction.None;
+            Debug.Log($"[Pending] Running deferred action: {action}");
+            if (action == DeferredAction.EndDay) { EndDay(); return; }
+            if (action == DeferredAction.Pause)
+            {
+                menuPanel.SetActive(false);
+                OpenPausePicker();
+                return;
+            }
         }
+
+        if (currentPuffIndex >= schedule.Count) { ShowFinishedState(); return; }
 
         nextPuffTime = new DateTime(schedule[currentPuffIndex]);
         if (!sleepMode && UserData.IsInSleepWindow(nextPuffTime))
@@ -347,53 +477,191 @@ public class MainAppController : MonoBehaviour
         RefreshNotifications();
         CheckRecovery();
         UpdateUI();
+
+        MaybeShowIdealPanel();
     }
 
     public void OpenCalendarForIndividualAccounting()
     {
-        // Placeholder - full implementation with item 3 (calendar day-list view).
         Debug.Log("[Pending] Individual accounting requested. Calendar day-list view not yet built.");
     }
 
-    // ================================================================
-    // UPDATE
-    // ================================================================
+    private void ShowUnaccountedPrompt(int count)
+    {
+        if (unaccountedPromptTitle != null)
+        {
+            string s = count == 1 ? "" : "s";
+            unaccountedPromptTitle.text = $"You have {count} unaccounted-for puff{s}.";
+        }
+        if (unaccountedPromptPanel != null) unaccountedPromptPanel.SetActive(true);
+    }
+
+    public void OnAccountUnaccountedClicked()
+    {
+        if (unaccountedPromptPanel != null) unaccountedPromptPanel.SetActive(false);
+
+        int overdue = GetOverdueCount();
+        if (overdue > 0 && pendingPuffsController != null)
+        {
+            pendingPuffsController.ShowPendingPanel(overdue);
+            return;
+        }
+
+        var action = deferredAction;
+        deferredAction = DeferredAction.None;
+        if (action == DeferredAction.EndDay) EndDay();
+        else if (action == DeferredAction.Pause) { menuPanel.SetActive(false); OpenPausePicker(); }
+    }
+
+    public void OnForgetUnaccountedClicked()
+    {
+        int overdue = GetOverdueCount();
+        Debug.Log($"[Unaccounted] Forgetting {overdue} puffs.");
+
+        MarkPuffsErased(currentPuffIndex, currentPuffIndex + overdue);
+
+        currentPuffIndex += overdue;
+        if (currentPuffIndex > schedule.Count) currentPuffIndex = schedule.Count;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+
+        ReconcileCurrentIndexFromRecords();
+
+        if (unaccountedPromptPanel != null) unaccountedPromptPanel.SetActive(false);
+
+        var action = deferredAction;
+        deferredAction = DeferredAction.None;
+        if (action == DeferredAction.EndDay) EndDay();
+        else if (action == DeferredAction.Pause) { menuPanel.SetActive(false); OpenPausePicker(); }
+    }
+
+    private bool WasPauseLongOrCrossedSleep(DateTime? pauseStart, DateTime resumeTime)
+    {
+        if (!pauseStart.HasValue) return false;
+        TimeSpan duration = resumeTime - pauseStart.Value;
+        if (duration.TotalHours >= LONG_PAUSE_HOURS) return true;
+        if (UserData.IsInSleepWindow(resumeTime)) return true;
+        return false;
+    }
+
+    private void ShowPauseResumePrompt()
+    {
+        if (pauseResumePromptPanel != null) pauseResumePromptPanel.SetActive(true);
+    }
+
+    public void OnStillMyDayClicked()
+    {
+        Debug.Log("[Pause] User says still my day. Resuming.");
+        if (pauseResumePromptPanel != null) pauseResumePromptPanel.SetActive(false);
+
+        var start = UserData.PauseStartTime;
+        var end = UserData.PauseEndTime;
+        if (start.HasValue && end.HasValue)
+            ErasePuffsInPauseWindow(start.Value, end.Value);
+
+        pauseEndTime = null;
+        UserData.PauseEndTime = null;
+        UserData.PauseStartTime = null;
+        UserData.Save();
+
+        if (UserData.IsInSleepWindow(nextPuffTime))
+            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
+
+        RefreshNotifications();
+        UpdateUI();
+    }
+
+    public void OnEndOfDayFromPauseClicked()
+    {
+        Debug.Log("[Pause] User says end of day.");
+        if (pauseResumePromptPanel != null) pauseResumePromptPanel.SetActive(false);
+
+        EndDay();
+    }
+
+    private void MaybeShowIdealPanel()
+    {
+        if (idealNumberPanel == null) return;
+        if (UserData.IdealPanelShownToday) return;
+        if (!UserData.WokeEarlyToday) return;
+        if (sleepMode || IsPaused) return;
+
+        int smokedToday = UserData.GetPuffsForDate(TimeService.Now);
+        if (smokedToday < UserData.PuffsPerDay) return;
+
+        Debug.Log($"[Ideal] Ideal count reached ({smokedToday} >= {UserData.PuffsPerDay}). Showing panel.");
+        UserData.IdealPanelShownToday = true;
+        UserData.Save();
+        idealNumberPanel.SetActive(true);
+    }
+
+    public void OnKeepSmokingClicked()
+    {
+        Debug.Log("[Ideal] User chose keep smoking.");
+        if (idealNumberPanel != null) idealNumberPanel.SetActive(false);
+        UpdateUI();
+    }
+
+    public void OnStopForDayClicked()
+    {
+        Debug.Log("[Ideal] User chose stop for the day.");
+        if (idealNumberPanel != null) idealNumberPanel.SetActive(false);
+        EndDay();
+    }
+
+    public void OnReduceFrequencyClicked()
+    {
+        Debug.Log("[Ideal] User chose reduce frequency. (Redistribution logic pending.)");
+        if (idealNumberPanel != null) idealNumberPanel.SetActive(false);
+        UpdateUI();
+    }
 
     void Update()
     {
         if (!isInitialized || currentPuffIndex >= schedule.Count) return;
 
-        if (pausePanel.activeSelf) return;
-        if (settingsPanel.activeSelf) return;
-        if (confirmResetPanel.activeSelf) return;
-        if (confirmResetProgressPanel != null && confirmResetProgressPanel.activeSelf) return;
-        if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) return;
-        if (overBudgetPanel != null && overBudgetPanel.activeSelf) return;
-        if (recoveryPanel != null && recoveryPanel.activeSelf) return;
+        if (pausePanel.activeSelf) { HideTopHalf(); return; }
+        if (settingsPanel.activeSelf) { HideTopHalf(); return; }
+        if (confirmResetPanel.activeSelf) { HideTopHalf(); return; }
+        if (confirmResetProgressPanel != null && confirmResetProgressPanel.activeSelf) { HideTopHalf(); return; }
+        if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) { HideTopHalf(); return; }
+        if (overBudgetPanel != null && overBudgetPanel.activeSelf) { HideTopHalf(); return; }
+        if (recoveryPanel != null && recoveryPanel.activeSelf) { HideTopHalf(); return; }
+        if (unaccountedPromptPanel != null && unaccountedPromptPanel.activeSelf) { HideTopHalf(); return; }
+        if (pauseResumePromptPanel != null && pauseResumePromptPanel.activeSelf) { HideTopHalf(); return; }
+        if (idealNumberPanel != null && idealNumberPanel.activeSelf) { HideTopHalf(); return; }
+        if (dayListPanel != null && dayListPanel.activeSelf) { return; }
+        if (pickerManager != null && pickerManager.IsOpen()) { HideTopHalf(); return; }
 
-        if (pendingPuffsController != null && pendingPuffsController.IsPanelActive()) return;
-
-        if (pendingPuffCount > 0 && pendingPuffsController != null)
-        {
-            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
-            return;
-        }
-
-        DateTime now = DateTime.Now;
-
+        DateTime now = TimeService.Now;
         ValidateExtendedDay();
 
         if (sleepMode)
         {
             UpdateSleepModeUI(now);
+            if (pendingPuffsController != null) pendingPuffsController.HidePanel();
             return;
         }
 
         if (IsPaused && now >= pauseEndTime.Value)
         {
+            DateTime? start = UserData.PauseStartTime;
+            bool needsPrompt = WasPauseLongOrCrossedSleep(start, now);
+
+            if (needsPrompt)
+            {
+                Debug.Log("[Pause] Expired. Showing resume prompt.");
+                ShowPauseResumePrompt();
+                return;
+            }
+
+            if (start.HasValue)
+                ErasePuffsInPauseWindow(start.Value, pauseEndTime.Value);
+
             pauseEndTime = null;
             UserData.PauseEndTime = null;
             UserData.PauseStartTime = null;
+            UserData.Save();
 
             if (UserData.IsInSleepWindow(nextPuffTime))
                 nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
@@ -406,9 +674,9 @@ public class MainAppController : MonoBehaviour
         {
             waitingPanel.SetActive(false);
             smokePromptPanel.SetActive(false);
-            finishedPanel.SetActive(false);
             menuPanel.SetActive(false);
             activePausePanel.SetActive(true);
+            if (pendingPuffsController != null) pendingPuffsController.HidePanel();
             if (sleepModePanel != null) sleepModePanel.SetActive(false);
 
             TimeSpan left = pauseEndTime.Value - now;
@@ -422,43 +690,61 @@ public class MainAppController : MonoBehaviour
         }
 
         activePausePanel.SetActive(false);
-        menuPanel.SetActive(true);
 
-        if (now >= nextPuffTime && smokePromptShownAt.HasValue)
+        int overdue = GetOverdueCount();
+
+        if (overdue >= 2)
         {
-            TimeSpan promptAge = now - smokePromptShownAt.Value;
-            if (promptAge.TotalMinutes >= PUFF_EXPIRY_MINUTES)
+            waitingPanel.SetActive(true);
+            smokePromptPanel.SetActive(false);
+            menuPanel.SetActive(false);
+            if (sleepModePanel != null) sleepModePanel.SetActive(false);
+
+            TimeSpan behind = now - new DateTime(schedule[currentPuffIndex]);
+            statusText.text = "Next puff overdue:";
+            timerText.text = string.Format("{0:D2}:{1:D2}:{2:D2}",
+                (int)behind.TotalHours, behind.Minutes, behind.Seconds);
+
+            if (pendingPuffsController != null)
             {
-                Debug.Log($"[MainApp] Puff expired after {promptAge.TotalMinutes:F0} min. Counting as declined.");
-                UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-                consecutiveMisses++;
-                smokePromptShownAt = null;
-                AdvanceToNextPuff(false);
-                CheckAutoSleepTrigger();
-                return;
+                if (!pendingPuffsController.IsPanelActive())
+                    pendingPuffsController.ShowPendingPanel(overdue);
+                else
+                    pendingPuffsController.RefreshCount(overdue);
             }
+            return;
         }
 
-        if (now >= nextPuffTime)
+        if (pendingPuffsController != null) pendingPuffsController.HidePanel();
+
+        menuPanel.SetActive(true);
+
+        if (overdue == 1)
         {
             waitingPanel.SetActive(false);
             smokePromptPanel.SetActive(true);
-            finishedPanel.SetActive(false);
-            statusText.text = "Time to smoke!";
-            timerText.text = "00:00";
 
-            if (!smokePromptShownAt.HasValue)
-                smokePromptShownAt = now;
+            TimeSpan behind = now - new DateTime(schedule[currentPuffIndex]);
+            statusText.text = "Time to smoke!";
+            timerText.text = string.Format("{0:D2}:{1:D2}:{2:D2}",
+                (int)behind.TotalHours, behind.Minutes, behind.Seconds);
 
             if (notificationSound != null && !notificationSound.isPlaying)
                 notificationSound.Play();
+            return;
+        }
+
+        smokePromptPanel.SetActive(false);
+
+        if (now >= nextPuffTime)
+        {
+            waitingPanel.SetActive(true);
+            statusText.text = "Next puff in:";
+            timerText.text = "00:00:00";
         }
         else
         {
             waitingPanel.SetActive(true);
-            smokePromptPanel.SetActive(false);
-            finishedPanel.SetActive(false);
-            smokePromptShownAt = null;
 
             TimeSpan timeLeft = nextPuffTime - now;
             statusText.text = "Next puff in:";
@@ -467,15 +753,17 @@ public class MainAppController : MonoBehaviour
         }
     }
 
-    // ================================================================
-    // SLEEP MODE
-    // ================================================================
+    private void HideTopHalf()
+    {
+        waitingPanel.SetActive(false);
+        smokePromptPanel.SetActive(false);
+        if (sleepModePanel != null) sleepModePanel.SetActive(false);
+    }
 
     void UpdateSleepModeUI(DateTime now)
     {
         waitingPanel.SetActive(false);
         smokePromptPanel.SetActive(false);
-        finishedPanel.SetActive(false);
         menuPanel.SetActive(false);
         activePausePanel.SetActive(false);
         pausePanel.SetActive(false);
@@ -485,30 +773,25 @@ public class MainAppController : MonoBehaviour
         {
             TimeSpan sleepFor = now - (UserData.SleepModeStartedAt ?? now);
             string startInfo = UserData.SleepModeStartedAt.HasValue
-                ? $"Sleep mode since {UserData.SleepModeStartedAt.Value:HH:mm}"
-                : "Sleep mode active";
+                ? $"Sleeping since {UserData.SleepModeStartedAt.Value:HH:mm}"
+                : "Sleeping";
             sleepStatusText.text = $"{startInfo}\n" +
                                    $"({sleepFor.Hours:D2}:{sleepFor.Minutes:D2} ago)\n\n" +
-                                   "Tap 'I'm up now' to start your day,\n" +
-                                   "or 'Cancel sleep' to undo.";
+                                   "Tap 'I'm up now' to start your day.";
         }
     }
 
     void EnterSleepMode()
     {
         if (sleepMode) return;
-
         sleepMode = true;
         UserData.SleepModeActive = true;
-        UserData.SleepModeStartedAt = DateTime.Now;
+        UserData.SleepModeStartedAt = TimeService.Now;
         UserData.WakeNotificationFiredAt = null;
         UserData.Save();
 
-        consecutiveMisses = 0;
-        smokePromptShownAt = null;
-
         NotificationScheduler.CancelAll();
-        Debug.Log($"[Sleep] Entered sleep mode at {DateTime.Now}.");
+        Debug.Log($"[Sleep] Entered sleep mode at {TimeService.Now}.");
 
         if (sleepModePanel != null) sleepModePanel.SetActive(true);
     }
@@ -516,46 +799,113 @@ public class MainAppController : MonoBehaviour
     void ExitSleepMode()
     {
         if (!sleepMode) return;
-
         sleepMode = false;
         UserData.SleepModeActive = false;
         UserData.SleepModeStartedAt = null;
         UserData.WakeNotificationFiredAt = null;
         UserData.Save();
-
-        consecutiveMisses = 0;
-        smokePromptShownAt = null;
-
-        Debug.Log($"[Sleep] Exited sleep mode at {DateTime.Now}.");
+        Debug.Log($"[Sleep] Exited sleep mode at {TimeService.Now}.");
     }
 
-    void CheckAutoSleepTrigger()
+    private bool TryRecoverFromEndDay()
     {
-        if (sleepMode) return;
+        int snapIndex = UserData.PreEndDayIndex;
+        long snapTicks = UserData.PreEndDayTicks;
 
-        bool inSleepWindow = UserData.IsInSleepWindow(DateTime.Now);
+        if (snapIndex < 0 || snapTicks == 0) return false;
 
-        bool shouldEnter =
-            (consecutiveMisses >= CONSECUTIVE_MISSES_FOR_AUTO_SLEEP && inSleepWindow) ||
-            (consecutiveMisses >= CONSECUTIVE_MISSES_HARD_OVERRIDE);
+        UserData.PreEndDayIndex = -1;
+        UserData.PreEndDayTicks = 0;
 
-        if (shouldEnter)
+        DateTime endedAt = new DateTime(snapTicks);
+        TimeSpan since = TimeService.Now - endedAt;
+
+        if (since.TotalHours >= END_DAY_RECOVERY_HOURS)
         {
-            Debug.Log($"[Sleep] Auto-trigger fired (misses={consecutiveMisses}, inSleepWindow={inSleepWindow}).");
-            EnterSleepMode();
+            Debug.Log($"[EndDay] Snapshot expired ({since.TotalHours:F2}h >= {END_DAY_RECOVERY_HOURS}h). Not recovering.");
+            UserData.Save();
+            return false;
         }
+
+        if (snapIndex > schedule.Count) snapIndex = schedule.Count;
+        if (snapIndex < 0) snapIndex = 0;
+
+        for (int i = snapIndex; i < schedule.Count; i++)
+        {
+            long t = schedule[i];
+            if (t < snapTicks) continue;
+            var rec = UserData.GetPuffRecord(t);
+            if (rec.HasValue && rec.Value.Status == PuffStatus.Erased)
+                UserData.DeletePuffRecord(t);
+        }
+
+        currentPuffIndex = snapIndex;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+
+        ReconcileCurrentIndexFromRecords();
+
+        Debug.Log($"[EndDay] Recovered after {since.TotalMinutes:F1} min. Restored puff index to {currentPuffIndex}.");
+        return true;
+    }
+
+    void EndDay()
+    {
+        Debug.Log("[EndDay] User ended the day.");
+        NotificationScheduler.CancelAll();
+
+        pauseEndTime = null;
+        UserData.PauseEndTime = null;
+        UserData.PauseStartTime = null;
+
+        UserData.PreEndDayIndex = currentPuffIndex;
+        UserData.PreEndDayTicks = TimeService.Now.Ticks;
+
+        DateTime now = TimeService.Now;
+        DateTime theoreticalWake = UserData.IsInSleepWindow(now)
+            ? UserData.NextWakeAfter(now)
+            : now.Date.AddDays(1).AddMinutes(UserData.WakeHour * 60 + UserData.WakeMinute);
+
+        int eraseStart = currentPuffIndex;
+        int eraseEnd = currentPuffIndex;
+        while (eraseEnd < schedule.Count &&
+               new DateTime(schedule[eraseEnd]) < theoreticalWake)
+        {
+            eraseEnd++;
+        }
+
+        MarkPuffsErased(eraseStart, eraseEnd);
+
+        currentPuffIndex = eraseEnd;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+
+        EnterSleepMode();
     }
 
     public void OnGoingToSleepClicked()
     {
-        Debug.Log("[Sleep] User tapped 'Going to sleep'.");
-        EnterSleepMode();
+        int overdue = GetOverdueCount();
+        if (overdue > 0)
+        {
+            deferredAction = DeferredAction.EndDay;
+            ShowUnaccountedPrompt(overdue);
+            return;
+        }
+        Debug.Log("[Sleep] User tapped 'End day'.");
+        EndDay();
     }
 
     public void OnImUpNowClicked()
     {
-        DateTime now = DateTime.Now;
-        Debug.Log($"[Sleep] User tapped 'I'm up now' (inSleepWindow={UserData.IsInSleepWindow(now)}).");
+        DateTime now = TimeService.Now;
+        Debug.Log($"[Sleep] User tapped 'I'm up now'.");
+
+        TryRecoverFromEndDay();
+
+        UserData.WokeEarlyToday = false;
+        UserData.IdealPanelShownToday = false;
+        UserData.Save();
 
         if (UserData.IsInSleepWindow(now))
         {
@@ -563,44 +913,36 @@ public class MainAppController : MonoBehaviour
             {
                 if (sleepModePanel != null) sleepModePanel.SetActive(false);
                 confirmEarlyWakePanel.SetActive(true);
-                Debug.Log("[Sleep] Showing early-wake confirmation.");
                 return;
             }
-            else
-            {
-                Debug.LogWarning("[Sleep] confirmEarlyWakePanel missing; proceeding as if yes.");
-                DoEarlyWakeYes();
-            }
+            else DoEarlyWakeYes();
             return;
         }
 
-        RedistributeRemainingPuffsToday();
         ExitSleepMode();
-
         if (currentPuffIndex < schedule.Count)
             nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-
         RefreshNotifications();
         UpdateUI();
     }
 
     public void OnEarlyWakeYesClicked()
     {
-        Debug.Log("[Sleep] User confirmed early wake.");
         if (confirmEarlyWakePanel != null) confirmEarlyWakePanel.SetActive(false);
         DoEarlyWakeYes();
     }
 
     public void OnEarlyWakeNoClicked()
     {
-        Debug.Log("[Sleep] User declined early wake - staying in sleep mode.");
         if (confirmEarlyWakePanel != null) confirmEarlyWakePanel.SetActive(false);
         if (sleepModePanel != null) sleepModePanel.SetActive(true);
     }
 
     void DoEarlyWakeYes()
     {
-        StartExtendedDay();
+        UserData.WokeEarlyToday = true;
+        UserData.Save();
+
         ExitSleepMode();
         RefreshNotifications();
         UpdateUI();
@@ -608,114 +950,21 @@ public class MainAppController : MonoBehaviour
 
     public void OnCancelSleepClicked()
     {
-        Debug.Log("[Sleep] User tapped 'Cancel sleep'.");
+        TryRecoverFromEndDay();
+
         ExitSleepMode();
-
-        DateTime now = DateTime.Now;
-        while (currentPuffIndex < schedule.Count &&
-               new DateTime(schedule[currentPuffIndex]) <= now)
-        {
-            Debug.Log($"[CancelSleep] Skipping past-due puff {currentPuffIndex}.");
-            currentPuffIndex++;
-        }
-        UserData.CurrentPuffIndex = currentPuffIndex;
-        UserData.Save();
-
-        if (currentPuffIndex >= schedule.Count)
-        {
-            ShowFinishedState();
-            return;
-        }
-
-        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-        if (UserData.IsInSleepWindow(nextPuffTime))
-            nextPuffTime = UserData.NextWakeAfter(nextPuffTime);
-
         RefreshNotifications();
         UpdateUI();
-    }
-
-    // ================================================================
-    // EXTENDED DAY
-    // ================================================================
-
-    void StartExtendedDay()
-    {
-        DateTime now = DateTime.Now;
-        int wakeMin = UserData.WakeHour * 60 + UserData.WakeMinute;
-        int A = UserData.AwakeMinutes;
-
-        DateTime today = now.Date;
-        DateTime todayWake = today.AddMinutes(wakeMin);
-        DateTime todaySleep = todayWake.AddMinutes(A);
-
-        if (now >= todaySleep)
-        {
-            Debug.LogWarning("[ExtDay] now already past today's sleep. Bailing.");
-            return;
-        }
-
-        int startIdx = currentPuffIndex;
-        int endIdx = startIdx - 1;
-        for (int i = currentPuffIndex; i < schedule.Count; i++)
-        {
-            DateTime t = new DateTime(schedule[i]);
-            if (t >= todaySleep) break;
-            endIdx = i;
-        }
-
-        if (endIdx < startIdx)
-        {
-            Debug.Log("[ExtDay] No puffs to redistribute for today.");
-            return;
-        }
-
-        int budget = endIdx - startIdx + 1;
-        float interval = (float)A / budget;
-        double extWindowMin = (todaySleep - now).TotalMinutes;
-        int extendedCount = Mathf.Max(1, Mathf.FloorToInt((float)(extWindowMin / interval)));
-
-        var newTicks = new List<long>(extendedCount);
-        DateTime cursor = now;
-        for (int i = 0; i < extendedCount; i++)
-        {
-            cursor = cursor.AddMinutes(interval);
-            newTicks.Add(cursor.Ticks);
-        }
-
-        var rebuilt = new List<long>(schedule.Count - (endIdx - startIdx + 1) + extendedCount);
-        for (int i = 0; i < startIdx; i++) rebuilt.Add(schedule[i]);
-        rebuilt.AddRange(newTicks);
-        for (int i = endIdx + 1; i < schedule.Count; i++) rebuilt.Add(schedule[i]);
-
-        schedule = rebuilt;
-        UserData.SaveSchedulePreserveProgress(schedule);
-
-        currentPuffIndex = startIdx;
-        UserData.CurrentPuffIndex = currentPuffIndex;
-
-        UserData.ExtendedDayDate = today.ToString("yyyy-MM-dd");
-        UserData.ExtendedDayBudget = startIdx + budget;
-        UserData.ExtendedDaySleepTicks = todaySleep.Ticks;
-        UserData.OverBudgetDecision = 0;
-        UserData.Save();
-
-        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-
-        Debug.Log($"[ExtDay] Budget {budget}, interval {interval:F2} min, " +
-                  $"extended count {extendedCount}, trigger index {startIdx + budget}.");
     }
 
     void ValidateExtendedDay()
     {
         if (string.IsNullOrEmpty(UserData.ExtendedDayDate)) return;
-
         long sleepTicks = UserData.ExtendedDaySleepTicks;
         if (sleepTicks == 0) return;
 
-        if (DateTime.Now.Ticks >= sleepTicks)
+        if (TimeService.Now.Ticks >= sleepTicks)
         {
-            Debug.Log("[ExtDay] Extended day ended - clearing state.");
             UserData.ExtendedDayDate = "";
             UserData.ExtendedDayBudget = -1;
             UserData.ExtendedDaySleepTicks = 0;
@@ -724,22 +973,8 @@ public class MainAppController : MonoBehaviour
         }
     }
 
-    void CheckOverBudget()
-    {
-        if (UserData.OverBudgetDecision != 0) return;
-        if (string.IsNullOrEmpty(UserData.ExtendedDayDate)) return;
-
-        if (currentPuffIndex >= UserData.ExtendedDayBudget)
-        {
-            Debug.Log("[OverBudget] Triggered.");
-            if (overBudgetPanel != null)
-                overBudgetPanel.SetActive(true);
-        }
-    }
-
     public void OnOverBudgetContinueClicked()
     {
-        Debug.Log("[OverBudget] User chose to continue.");
         UserData.OverBudgetDecision = 1;
         UserData.Save();
         if (overBudgetPanel != null) overBudgetPanel.SetActive(false);
@@ -748,34 +983,11 @@ public class MainAppController : MonoBehaviour
 
     public void OnOverBudgetStopClicked()
     {
-        Debug.Log("[OverBudget] User chose to stop until sleep.");
         UserData.OverBudgetDecision = 2;
         UserData.Save();
         if (overBudgetPanel != null) overBudgetPanel.SetActive(false);
-
-        long sleepTicks = UserData.ExtendedDaySleepTicks;
-        while (currentPuffIndex < schedule.Count &&
-               (sleepTicks == 0 || schedule[currentPuffIndex] < sleepTicks))
-        {
-            currentPuffIndex++;
-        }
-        UserData.CurrentPuffIndex = currentPuffIndex;
-        UserData.Save();
-
-        if (currentPuffIndex >= schedule.Count)
-        {
-            ShowFinishedState();
-            return;
-        }
-
-        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-        RefreshNotifications();
-        UpdateUI();
+        EndDay();
     }
-
-    // ================================================================
-    // RECOVERY
-    // ================================================================
 
     void CheckRecovery()
     {
@@ -783,7 +995,7 @@ public class MainAppController : MonoBehaviour
         if (UserData.LastDeclinedAtTicks == 0) return;
 
         DateTime declinedAt = new DateTime(UserData.LastDeclinedAtTicks);
-        TimeSpan since = DateTime.Now - declinedAt;
+        TimeSpan since = TimeService.Now - declinedAt;
 
         if (since.TotalMinutes > 30)
         {
@@ -792,175 +1004,80 @@ public class MainAppController : MonoBehaviour
             return;
         }
 
-        if (recoveryPanel != null)
-        {
-            recoveryPanel.SetActive(true);
-            Debug.Log($"[Recovery] Recent decline at {declinedAt:HH:mm} - showing recovery panel.");
-        }
+        if (recoveryPanel != null) recoveryPanel.SetActive(true);
     }
 
     public void OnRecoveryYesClicked()
     {
-        Debug.Log("[Recovery] User says they DID smoke - correcting.");
+        int idx = UserData.LastDeclinedIndex;
+        if (idx >= 0 && idx < schedule.Count)
+            UserData.RecordPuffResolution(schedule[idx], PuffStatus.Smoked);
+
         UserData.DeclinedPuffs = Mathf.Max(0, UserData.DeclinedPuffs - 1);
         UserData.LogPuffToday();
         UserData.LastDeclinedIndex = -1;
         UserData.Save();
-
         if (recoveryPanel != null) recoveryPanel.SetActive(false);
     }
 
     public void OnRecoveryNoClicked()
     {
-        Debug.Log("[Recovery] User confirms they did NOT smoke.");
         UserData.LastDeclinedIndex = -1;
         UserData.Save();
         if (recoveryPanel != null) recoveryPanel.SetActive(false);
     }
 
-    // ================================================================
-    // REDISTRIBUTE
-    // ================================================================
-
-    void RedistributeRemainingPuffsToday()
-    {
-        DateTime now = DateTime.Now;
-        int wakeMin = UserData.WakeHour * 60 + UserData.WakeMinute;
-        int A = UserData.AwakeMinutes;
-
-        DateTime today = now.Date;
-        DateTime todayWake = today.AddMinutes(wakeMin);
-        DateTime windowStart, windowEnd;
-
-        if (now >= todayWake)
-        {
-            windowStart = now;
-            windowEnd = todayWake.AddMinutes(A);
-        }
-        else
-        {
-            DateTime yesterdayWake = todayWake.AddDays(-1);
-            DateTime yesterdaySleep = yesterdayWake.AddMinutes(A);
-            if (now < yesterdaySleep)
-            {
-                windowStart = now;
-                windowEnd = yesterdaySleep;
-            }
-            else
-            {
-                windowStart = now;
-                windowEnd = todayWake.AddMinutes(A);
-            }
-        }
-
-        if (windowEnd <= windowStart) return;
-
-        int startIdx = -1, endIdx = -1;
-        for (int i = currentPuffIndex; i < schedule.Count; i++)
-        {
-            DateTime t = new DateTime(schedule[i]);
-            if (t >= windowEnd) break;
-            if (t >= now)
-            {
-                if (startIdx == -1) startIdx = i;
-                endIdx = i;
-            }
-        }
-
-        if (startIdx == -1) return;
-
-        int puffCount = endIdx - startIdx + 1;
-        double remainingMin = (windowEnd - now).TotalMinutes;
-        float interval = (float)(remainingMin / puffCount);
-
-        var newTicks = new List<long>(puffCount);
-        DateTime cursor = now;
-        for (int i = 0; i < puffCount; i++)
-        {
-            cursor = cursor.AddMinutes(interval);
-            newTicks.Add(cursor.Ticks);
-        }
-
-        var rebuilt = new List<long>(schedule.Count);
-        for (int i = 0; i < startIdx; i++) rebuilt.Add(schedule[i]);
-        rebuilt.AddRange(newTicks);
-        for (int i = endIdx + 1; i < schedule.Count; i++) rebuilt.Add(schedule[i]);
-
-        schedule = rebuilt;
-        UserData.SaveSchedulePreserveProgress(schedule);
-
-        currentPuffIndex = startIdx;
-        UserData.CurrentPuffIndex = currentPuffIndex;
-        UserData.Save();
-
-        Debug.Log($"[Redistribute] {puffCount} puffs over {remainingMin:F0} min (interval {interval:F2} min).");
-    }
-
-    // ================================================================
-    // PUFF BUTTONS
-    // ================================================================
-
     void OnSmokeButtonClicked()
     {
-        Debug.Log("Puff logged at: " + DateTime.Now);
+        long scheduledTicks = schedule[currentPuffIndex];
         UserData.LogPuffToday();
-        consecutiveMisses = 0;
-        smokePromptShownAt = null;
-        AdvanceToNextPuff(true);
+        UserData.RecordPuffResolution(scheduledTicks, PuffStatus.Smoked);
+
+        currentPuffIndex++;
+        if (currentPuffIndex > schedule.Count) currentPuffIndex = schedule.Count;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+        AdvanceAfterResolve();
+        MaybeShowIdealPanel();
     }
 
     void OnSkipButtonClicked()
     {
-        Debug.Log("Puff declined at: " + DateTime.Now);
+        long scheduledTicks = schedule[currentPuffIndex];
         UserData.DeclinedPuffs = UserData.DeclinedPuffs + 1;
-        consecutiveMisses++;
-        smokePromptShownAt = null;
-        AdvanceToNextPuff(false);
-        CheckAutoSleepTrigger();
-    }
+        UserData.RecordPuffResolution(scheduledTicks, PuffStatus.Skipped);
 
-    void AdvanceToNextPuff(bool wasSmoke)
-    {
         currentPuffIndex++;
+        if (currentPuffIndex > schedule.Count) currentPuffIndex = schedule.Count;
         UserData.CurrentPuffIndex = currentPuffIndex;
         UserData.Save();
-
-        if (currentPuffIndex < schedule.Count)
-        {
-            nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-
-            while (currentPuffIndex < schedule.Count &&
-                   UserData.IsInSleepWindow(nextPuffTime))
-            {
-                Debug.Log($"[MainApp] Skipping puff {currentPuffIndex} inside sleep window.");
-                currentPuffIndex++;
-                UserData.CurrentPuffIndex = currentPuffIndex;
-                if (currentPuffIndex < schedule.Count)
-                    nextPuffTime = new DateTime(schedule[currentPuffIndex]);
-            }
-
-            UserData.Save();
-
-            if (currentPuffIndex >= schedule.Count)
-            {
-                ShowFinishedState();
-                return;
-            }
-
-            CheckOverBudget();
-
-            RefreshNotifications();
-            UpdateUI();
-        }
-        else
-        {
-            ShowFinishedState();
-        }
+        AdvanceAfterResolve();
     }
 
-    // ================================================================
-    // NOTIFICATIONS / UI
-    // ================================================================
+    void AdvanceAfterResolve()
+    {
+        ReconcileCurrentIndexFromRecords();
+
+        if (currentPuffIndex >= schedule.Count) { ShowFinishedState(); return; }
+
+        nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+
+        while (currentPuffIndex < schedule.Count &&
+               !sleepMode &&
+               UserData.IsInSleepWindow(nextPuffTime))
+        {
+            currentPuffIndex++;
+            UserData.CurrentPuffIndex = currentPuffIndex;
+            if (currentPuffIndex < schedule.Count)
+                nextPuffTime = new DateTime(schedule[currentPuffIndex]);
+        }
+
+        UserData.Save();
+        if (currentPuffIndex >= schedule.Count) { ShowFinishedState(); return; }
+
+        RefreshNotifications();
+        UpdateUI();
+    }
 
     void RefreshNotifications()
     {
@@ -968,38 +1085,66 @@ public class MainAppController : MonoBehaviour
         if (IsPaused || sleepMode) { NotificationScheduler.CancelAll(); return; }
 
         NotificationScheduler.SchedulePuffs(
-            schedule,
-            currentPuffIndex,
-            pauseEndTime,
-            0,
-            UserData.PuffsPerDay);
+            schedule, currentPuffIndex, pauseEndTime, 0, UserData.PuffsPerDay);
     }
 
     void UpdateUI()
     {
-        smokePromptPanel.SetActive(false);
-        waitingPanel.SetActive(true);
-        finishedPanel.SetActive(false);
-        activePausePanel.SetActive(false);
-        if (sleepModePanel != null) sleepModePanel.SetActive(false);
-        menuPanel.SetActive(true);
+        if (sleepMode)
+        {
+            if (sleepModePanel != null) sleepModePanel.SetActive(true);
+        }
+        else
+        {
+            if (sleepModePanel != null) sleepModePanel.SetActive(false);
+        }
     }
 
     void ShowFinishedState()
     {
         waitingPanel.SetActive(false);
         smokePromptPanel.SetActive(false);
-        finishedPanel.SetActive(true);
         activePausePanel.SetActive(false);
         if (sleepModePanel != null) sleepModePanel.SetActive(false);
-        statusText.text = "You have completed your taper!";
-        timerText.text = "";
+        if (pendingPuffsController != null) pendingPuffsController.HidePanel();
+        if (menuPanel != null) menuPanel.SetActive(false);
         NotificationScheduler.CancelAll();
+
+        if (taperCompletePanel == null || schedule == null || schedule.Count == 0) return;
+        if (celebrationActive) return;
+
+        celebrationActive = true;
+        DateTime startDate = new DateTime(schedule[0]).Date;
+        DateTime finishDate = TimeService.Now.Date;
+
+        taperCompletePanel.Show(startDate, finishDate,
+            OnViewCalendarFromCelebration,
+            OnOpenSettingsFromCelebration);
     }
 
-    // ================================================================
-    // RESUME / FOCUS
-    // ================================================================
+    void OnViewCalendarFromCelebration()
+    {
+        celebrationActive = false;
+        if (taperCompletePanel != null && taperCompletePanel.panelRoot != null)
+            taperCompletePanel.panelRoot.SetActive(false);
+        if (calendarController != null)
+            calendarController.OpenCalendar();
+    }
+
+    void OnOpenSettingsFromCelebration()
+    {
+        celebrationActive = false;
+        if (taperCompletePanel != null && taperCompletePanel.panelRoot != null)
+            taperCompletePanel.panelRoot.SetActive(false);
+        if (settingsPanel != null)
+            settingsPanel.SetActive(true);
+    }
+
+    void OnCalendarClosed()
+    {
+        if (currentPuffIndex >= schedule.Count && !celebrationActive)
+            ShowFinishedState();
+    }
 
     void OnApplicationPause(bool paused)
     {
@@ -1015,7 +1160,6 @@ public class MainAppController : MonoBehaviour
     private void OnResumeFromBackground()
     {
         if (!isInitialized) return;
-
         RefreshNotifications();
 
 #if UNITY_IOS
@@ -1037,8 +1181,7 @@ public class MainAppController : MonoBehaviour
             lastProcessedNotificationId != op.Notification.Identifier)
         {
             lastProcessedNotificationId = op.Notification.Identifier;
-            Debug.Log($"[Notif] Resume response - id={op.Notification.Identifier}, action={op.ActionId}");
-            ApplyNotificationAnswer(op.Notification.Identifier, op.ActionId);
+            ApplyNotificationAnswer(op.Notification.Identifier, op.Notification.ActionId);
         }
 
         HandlePendingPuffsOnResume();
@@ -1050,25 +1193,9 @@ public class MainAppController : MonoBehaviour
         if (pendingPuffsController != null && pendingPuffsController.IsPanelActive())
             return;
 
-        if (pausePanel.activeSelf) return;
-        if (settingsPanel.activeSelf) return;
-        if (confirmResetPanel.activeSelf) return;
-        if (confirmResetProgressPanel != null && confirmResetProgressPanel.activeSelf) return;
-        if (confirmEarlyWakePanel != null && confirmEarlyWakePanel.activeSelf) return;
-        if (overBudgetPanel != null && overBudgetPanel.activeSelf) return;
-        if (recoveryPanel != null && recoveryPanel.activeSelf) return;
-
-        RunCatchUp();
-
-        if (pendingPuffCount > 0 && pendingPuffsController != null)
-        {
-            pendingPuffsController.ShowPendingPanel(pendingPuffCount);
-            return;
-        }
-
         if (currentPuffIndex >= schedule.Count)
         {
-            ShowFinishedState();
+            if (!celebrationActive) ShowFinishedState();
             return;
         }
 
@@ -1081,31 +1208,90 @@ public class MainAppController : MonoBehaviour
         UpdateUI();
     }
 
-    // ================================================================
-    // PAUSE
-    // ================================================================
-
     void OpenPauseMenu()
     {
+        int overdue = GetOverdueCount();
+        if (overdue > 0)
+        {
+            deferredAction = DeferredAction.Pause;
+            ShowUnaccountedPrompt(overdue);
+            return;
+        }
         menuPanel.SetActive(false);
-        pausePanel.SetActive(true);
+        OpenPausePicker();
+    }
+
+    void OpenPausePicker()
+    {
+        if (pickerManager == null)
+        {
+            Debug.LogWarning("[Pause] Picker not wired, falling back to old pause panel.");
+            pausePanel.SetActive(true);
+            return;
+        }
+
+        int hoursCount = PICKER_HOURS_MAX + 1;
+        string[] hours = new string[hoursCount];
+        for (int i = 0; i < hoursCount; i++)
+        {
+            int h = i;
+            hours[i] = h == 1 ? "1 hr" : $"{h} hr";
+        }
+
+        string[] minutes = new string[PICKER_MINUTE_STEPS];
+        for (int i = 0; i < PICKER_MINUTE_STEPS; i++)
+        {
+            int m = i * PICKER_MINUTE_STEP;
+            minutes[i] = $"{m} min";
+        }
+
+        pickerManager.Show(
+            "Pause for how long?",
+            hours, minutes,
+            pendingPauseHours, pendingPauseMinutes / PICKER_MINUTE_STEP,
+            OnPausePicked, OnPausePickCancelled);
+    }
+
+    void OnPausePicked(int hoursIndex, int minutesIndex)
+    {
+        pendingPauseHours = hoursIndex;
+        pendingPauseMinutes = minutesIndex * PICKER_MINUTE_STEP;
+
+        int totalMinutes = pendingPauseHours * 60 + pendingPauseMinutes;
+        if (totalMinutes < 5) totalMinutes = 5;
+
+        DateTime now = TimeService.Now;
+        pauseEndTime = now.AddMinutes(totalMinutes);
+        UserData.PauseStartTime = now;
+        UserData.PauseEndTime = pauseEndTime;
+        UserData.Save();
+
+        NotificationScheduler.CancelAll();
+        Debug.Log($"[Pause] Paused for {totalMinutes} min until {pauseEndTime.Value}");
+        UpdateUI();
+    }
+
+    void OnPausePickCancelled()
+    {
+        Debug.Log("[Pause] Cancelled by user.");
+        menuPanel.SetActive(true);
     }
 
     void ConfirmPause()
     {
+        if (pauseHoursInput == null)
+        {
+            Debug.LogWarning("[Pause] ConfirmPause called with no input field.");
+            return;
+        }
         if (!float.TryParse(pauseHoursInput.text.Trim(), out float hours) || hours <= 0)
         {
             Debug.LogWarning("[Pause] Invalid input.");
             return;
         }
+        if (hours > 48f) hours = 48f;
 
-        if (hours > 48f)
-        {
-            Debug.LogWarning($"[Pause] Capped from {hours} to 48 hours.");
-            hours = 48f;
-        }
-
-        DateTime now = DateTime.Now;
+        DateTime now = TimeService.Now;
         pauseEndTime = now.AddHours(hours);
         UserData.PauseStartTime = now;
         UserData.PauseEndTime = pauseEndTime;
@@ -1124,6 +1310,23 @@ public class MainAppController : MonoBehaviour
 
     void EndPause()
     {
+        DateTime? start = UserData.PauseStartTime;
+        DateTime now = TimeService.Now;
+        bool needsPrompt = WasPauseLongOrCrossedSleep(start, now);
+
+        if (needsPrompt)
+        {
+            pauseEndTime = now;
+            UserData.PauseEndTime = now;
+            UserData.Save();
+            Debug.Log("[Pause] Ended early but long/crossed sleep. Showing prompt.");
+            ShowPauseResumePrompt();
+            return;
+        }
+
+        if (start.HasValue)
+            ErasePuffsInPauseWindow(start.Value, now);
+
         pauseEndTime = null;
         UserData.PauseEndTime = null;
         UserData.PauseStartTime = null;
@@ -1136,29 +1339,30 @@ public class MainAppController : MonoBehaviour
         Debug.Log("Pause ended early by user.");
     }
 
-    // ================================================================
-    // SETTINGS / RESET
-    // ================================================================
-
     void OpenSettings() { menuPanel.SetActive(false); settingsPanel.SetActive(true); }
-    void CloseSettings() { settingsPanel.SetActive(false); menuPanel.SetActive(true); }
-    void ShowResetConfirmation() { settingsPanel.SetActive(false); confirmResetPanel.SetActive(true); }
-    void CancelReset() { confirmResetPanel.SetActive(false); settingsPanel.SetActive(true); }
-    void ShowResetProgressConfirmation()
+
+    void CloseSettings()
     {
         settingsPanel.SetActive(false);
-        confirmResetProgressPanel.SetActive(true);
+
+        if (currentPuffIndex >= schedule.Count)
+        {
+            celebrationActive = false;
+            ShowFinishedState();
+        }
+        else
+        {
+            menuPanel.SetActive(true);
+        }
     }
 
-    void CancelResetProgress()
-    {
-        confirmResetProgressPanel.SetActive(false);
-        settingsPanel.SetActive(true);
-    }
+    void ShowResetConfirmation() { settingsPanel.SetActive(false); confirmResetPanel.SetActive(true); }
+    void CancelReset() { confirmResetPanel.SetActive(false); settingsPanel.SetActive(true); }
+    void ShowResetProgressConfirmation() { settingsPanel.SetActive(false); confirmResetProgressPanel.SetActive(true); }
+    void CancelResetProgress() { confirmResetProgressPanel.SetActive(false); settingsPanel.SetActive(true); }
 
     void ConfirmResetProgress()
     {
-        Debug.Log("[Reset] Progress reset - regenerating schedule with current parameters.");
         NotificationScheduler.CancelAll();
         UserData.ResetProgress();
         TaperEngine.GenerateAndSaveSchedule();
@@ -1167,9 +1371,24 @@ public class MainAppController : MonoBehaviour
 
     void ConfirmReset()
     {
-        Debug.Log("Resetting app - wiping all data.");
         NotificationScheduler.CancelAll();
         UserData.ResetAll();
         SceneManager.LoadScene("Onboarding");
+    }
+
+    public void DebugTriggerTaperComplete()
+    {
+        if (schedule == null || schedule.Count == 0)
+        {
+            Debug.LogWarning("[Debug] Cannot trigger: no schedule loaded.");
+            return;
+        }
+
+        currentPuffIndex = schedule.Count;
+        UserData.CurrentPuffIndex = currentPuffIndex;
+        UserData.Save();
+
+        celebrationActive = false;
+        ShowFinishedState();
     }
 }

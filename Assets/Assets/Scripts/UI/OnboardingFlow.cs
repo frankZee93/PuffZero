@@ -8,19 +8,22 @@ public class OnboardingFlow : MonoBehaviour
     {
         public GameObject root;
         public TMP_InputField input;
+        public ScrollPicker picker;
     }
 
-    [Header("Pages in order")]
+    [Header("Pages in order: Wake, Sleep, Puffs, Taper")]
     public Page[] pages;
 
     [Header("Validation UI")]
     public TMP_Text validationText;
 
-    // Validation constants
     private const int MIN_AWAKE_MINUTES = 240;     // 4 hours
     private const int MIN_TAPER_DAYS = 2;
     private const int MAX_TAPER_DAYS = 365;
     private const int MAX_TOTAL_PUFFS = 500000;
+
+    private const int MINUTE_STEP = 5;
+    private const int MINUTE_STEPS = 12;           // 0, 5, 10, ..., 55
 
     private int current = 0;
 
@@ -28,6 +31,8 @@ public class OnboardingFlow : MonoBehaviour
     {
         ShowPage(0);
         ClearValidation();
+        if (pages.Length > 0 && pages[0].picker != null)
+            SetupPickerPage(0);
     }
 
     public void Next()
@@ -37,7 +42,18 @@ public class OnboardingFlow : MonoBehaviour
         ClearValidation();
         Page p = pages[current];
 
-        if (p.input != null)
+        if (p.picker != null)
+        {
+            p.picker.GetSelection(out int hourIdx, out int minuteIdx);
+            int hour = hourIdx;
+            int minute = minuteIdx * MINUTE_STEP;
+
+            if (!ValidatePickerPage(current, hour, minute))
+                return;
+
+            StorePickerPage(current, hour, minute);
+        }
+        else if (p.input != null)
         {
             string raw = p.input.text.Trim();
             if (!int.TryParse(raw, out int v))
@@ -46,16 +62,24 @@ public class OnboardingFlow : MonoBehaviour
                 return;
             }
 
-            if (!ValidatePage(current, v))
+            if (!ValidateInputPage(current, v))
                 return;
 
-            StoreForPage(current, v);
+            StoreInputPage(current, v);
         }
 
         current++;
 
-        if (current >= pages.Length) Finish();
-        else ShowPage(current);
+        if (current >= pages.Length)
+        {
+            Finish();
+        }
+        else
+        {
+            ShowPage(current);
+            if (pages[current].picker != null)
+                SetupPickerPage(current);
+        }
     }
 
     public void Back()
@@ -64,60 +88,55 @@ public class OnboardingFlow : MonoBehaviour
         ClearValidation();
         current--;
         ShowPage(current);
+        if (pages[current].picker != null)
+            SetupPickerPage(current);
     }
 
-    private bool ValidatePage(int index, int v)
+    private void ShowPage(int i)
     {
-        switch (index)
-        {
-            case 0: // Wake hour
-                if (v < 0 || v > 23) { ShowError("Hour must be 0-23."); return false; }
-                break;
-            case 1: // Wake minute
-                if (v < 0 || v > 59) { ShowError("Minute must be 0-59."); return false; }
-                // After wake minute, we have both wake H and M - but sleep not yet set.
-                break;
-            case 2: // Sleep hour
-                if (v < 0 || v > 23) { ShowError("Hour must be 0-23."); return false; }
-                break;
-            case 3: // Sleep minute - validate the whole awake window now
-                if (v < 0 || v > 59) { ShowError("Minute must be 0-59."); return false; }
-                if (!ValidateAwakeWindow()) return false;
-                break;
-            case 4: // Puffs per day
-                if (v < 1) { ShowError("You must enter at least 1 puff per day."); return false; }
-                int awake = UserData.AwakeMinutes;
-                if (v > awake)
-                {
-                    ShowError($"Too many puffs for a {awake}-minute awake window. Maximum is {awake}.");
-                    return false;
-                }
-                break;
-            case 5: // Taper days
-                if (v < MIN_TAPER_DAYS) { ShowError($"Taper must be at least {MIN_TAPER_DAYS} days."); return false; }
-                if (v > MAX_TAPER_DAYS) { ShowError($"Taper cannot exceed {MAX_TAPER_DAYS} days."); return false; }
-                long total = (long)UserData.PuffsPerDay * v;
-                if (total > MAX_TOTAL_PUFFS)
-                {
-                    ShowError($"Too many total puffs ({total:N0}). Reduce puffs per day or taper days.");
-                    return false;
-                }
-                break;
-        }
-        return true;
+        for (int p = 0; p < pages.Length; p++)
+            if (pages[p]?.root != null) pages[p].root.SetActive(p == i);
     }
 
-    private bool ValidateAwakeWindow()
+    private void SetupPickerPage(int index)
     {
-        // Sleep/wake haven't been stored yet since this is running during ValidatePage before StoreForPage.
-        // So we temporarily set them, check the window, and restore.
+        var picker = pages[index].picker;
+        if (picker == null) return;
+
+        string[] hours = new string[24];
+        for (int h = 0; h < 24; h++)
+            hours[h] = $"{h:D2}";
+
+        string[] mins = new string[MINUTE_STEPS];
+        for (int i = 0; i < MINUTE_STEPS; i++)
+            mins[i] = $"{(i * MINUTE_STEP):D2}";
+
+        int hInit = index == 0 ? UserData.WakeHour : UserData.SleepHour;
+        int mInit = (index == 0 ? UserData.WakeMinute : UserData.SleepMinute) / MINUTE_STEP;
+        if (mInit < 0) mInit = 0;
+        if (mInit >= MINUTE_STEPS) mInit = MINUTE_STEPS - 1;
+
+        picker.Show(
+            index == 0 ? "When do you wake up?" : "When do you go to sleep?",
+            hours, mins, hInit, mInit,
+            null, null,
+            hideButtons: true);
+    }
+
+    private bool ValidatePickerPage(int index, int hour, int minute)
+    {
+        int savedWakeH = UserData.WakeHour;
+        int savedWakeM = UserData.WakeMinute;
         int savedSleepH = UserData.SleepHour;
         int savedSleepM = UserData.SleepMinute;
-        UserData.SleepHour = Mathf.RoundToInt(GetInputValue(2));
-        UserData.SleepMinute = Mathf.RoundToInt(GetInputValue(3));
+
+        if (index == 0) { UserData.WakeHour = hour; UserData.WakeMinute = minute; }
+        else if (index == 1) { UserData.SleepHour = hour; UserData.SleepMinute = minute; }
 
         int awake = UserData.AwakeMinutes;
 
+        UserData.WakeHour = savedWakeH;
+        UserData.WakeMinute = savedWakeM;
         UserData.SleepHour = savedSleepH;
         UserData.SleepMinute = savedSleepM;
 
@@ -134,33 +153,42 @@ public class OnboardingFlow : MonoBehaviour
         return true;
     }
 
-    private float GetInputValue(int pageIndex)
+    private bool ValidateInputPage(int index, int v)
     {
-        if (pageIndex < 0 || pageIndex >= pages.Length) return 0f;
-        var input = pages[pageIndex].input;
-        if (input == null) return 0f;
-        if (int.TryParse(input.text.Trim(), out int v)) return v;
-        return 0f;
-    }
-
-    private void StoreForPage(int index, int value)
-    {
-        // 0=Wake hour, 1=Wake minute, 2=Sleep hour, 3=Sleep minute, 4=Puffs per day, 5=Taper days
-        switch (index)
+        if (index == 2)
         {
-            case 0: UserData.WakeHour = value; break;
-            case 1: UserData.WakeMinute = value; break;
-            case 2: UserData.SleepHour = value; break;
-            case 3: UserData.SleepMinute = value; break;
-            case 4: UserData.PuffsPerDay = value; break;
-            case 5: UserData.TaperDays = value; break;
+            if (v < 1) { ShowError("You must enter at least 1 puff per day."); return false; }
+            int awake = UserData.AwakeMinutes;
+            if (v > awake)
+            {
+                ShowError($"Too many puffs for a {awake}-minute awake window. Maximum is {awake}.");
+                return false;
+            }
         }
+        else if (index == 3)
+        {
+            if (v < MIN_TAPER_DAYS) { ShowError($"Taper must be at least {MIN_TAPER_DAYS} days."); return false; }
+            if (v > MAX_TAPER_DAYS) { ShowError($"Taper cannot exceed {MAX_TAPER_DAYS} days."); return false; }
+            long total = (long)UserData.PuffsPerDay * v;
+            if (total > MAX_TOTAL_PUFFS)
+            {
+                ShowError($"Too many total puffs ({total:N0}). Reduce puffs per day or taper days.");
+                return false;
+            }
+        }
+        return true;
     }
 
-    private void ShowPage(int i)
+    private void StorePickerPage(int index, int hour, int minute)
     {
-        for (int p = 0; p < pages.Length; p++)
-            if (pages[p]?.root != null) pages[p].root.SetActive(p == i);
+        if (index == 0) { UserData.WakeHour = hour; UserData.WakeMinute = minute; }
+        else if (index == 1) { UserData.SleepHour = hour; UserData.SleepMinute = minute; }
+    }
+
+    private void StoreInputPage(int index, int value)
+    {
+        if (index == 2) UserData.PuffsPerDay = value;
+        else if (index == 3) UserData.TaperDays = value;
     }
 
     private void ShowError(string message)

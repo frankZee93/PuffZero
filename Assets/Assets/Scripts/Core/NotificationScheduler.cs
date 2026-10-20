@@ -95,7 +95,7 @@ public static class NotificationScheduler
         if (schedule == null || schedule.Count == 0) return;
         if (startIndex < 0 || startIndex >= schedule.Count) return;
 
-        DateTime now = DateTime.Now;
+        DateTime now = TimeService.Now;
 
 #if UNITY_IOS
         int limit = IOS_PENDING_LIMIT;
@@ -112,9 +112,12 @@ public static class NotificationScheduler
             if (t <= now.AddSeconds(30)) continue;
             if (pauseEndTime.HasValue && t <= pauseEndTime.Value) continue;
 
-            // Numbers removed — the previous count was unreliable.
+            // Numbers removed - the previous count was unreliable.
             string body = "Time for your next puff. Tap to log it.";
-            ScheduleOne(t, $"puff_{i}", "Time to Smoke", body);
+
+            // Identifier is tick-based so it stays stable across schedule
+            // rebuilds (redistribute, extended day) and is unique per puff.
+            ScheduleOne(t, $"puff_{schedule[i]}", "Time to Smoke", body);
             scheduled++;
         }
 
@@ -127,7 +130,7 @@ public static class NotificationScheduler
     {
         CancelAll();
 
-        DateTime now = DateTime.Now;
+        DateTime now = TimeService.Now;
 
         var reminders = new List<(DateTime when, string title, string body)>
         {
@@ -154,7 +157,7 @@ public static class NotificationScheduler
             if (scheduled >= limit) break;
             if (r.when <= now.AddSeconds(30)) continue;
 
-            ScheduleOne(r.when, $"sleep_{scheduled}", r.title, r.body);
+            ScheduleOne(r.when, $"sleep_{r.when.Ticks}", r.title, r.body);
             scheduled++;
         }
 
@@ -177,7 +180,7 @@ public static class NotificationScheduler
     {
         var trigger = new iOSNotificationTimeIntervalTrigger()
         {
-            TimeInterval = fireTime - DateTime.Now,
+            TimeInterval = fireTime - TimeService.Now,
             Repeats = false,
         };
 
