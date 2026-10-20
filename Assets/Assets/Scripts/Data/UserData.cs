@@ -21,6 +21,7 @@ public static class UserData
     private const string KEY_TAPER_DAYS = "pz_taper_days";
     private const string KEY_SCHEDULE = "pz_schedule";
     private const string KEY_ONBOARDED = "pz_onboarded";
+    private const string KEY_TERMS_ACCEPTED = "pz_terms_accepted";
     private const string KEY_PUFF_INDEX = "pz_puff_index";
     private const string KEY_DECLINED_TOTAL = "pz_declined_total";
     private const string KEY_PAUSE_END_TICKS = "pz_pause_end_ticks";
@@ -66,6 +67,12 @@ public static class UserData
     {
         get => PlayerPrefs.GetInt(KEY_ONBOARDED, 0) == 1;
         set => PlayerPrefs.SetInt(KEY_ONBOARDED, value ? 1 : 0);
+    }
+
+    public static bool TermsAccepted
+    {
+        get => PlayerPrefs.GetInt(KEY_TERMS_ACCEPTED, 0) == 1;
+        set => PlayerPrefs.SetInt(KEY_TERMS_ACCEPTED, value ? 1 : 0);
     }
 
     public static void SaveSchedule(List<long> ticks)
@@ -384,9 +391,6 @@ public static class UserData
         _recordsCache.Remove(date);
     }
 
-    // Change the status of an existing puff record and adjust the counters
-    // that back the calendar / ideal panel. No-op if the record doesn't
-    // exist or the new status matches the current one.
     public static void ChangePuffStatus(long scheduledTicks, PuffStatus newStatus)
     {
         var existing = GetPuffRecord(scheduledTicks);
