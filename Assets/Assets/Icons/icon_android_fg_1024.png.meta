@@ -18,7 +18,7 @@ TextureImporter:
   serializedVersion: 13
   mipmaps:
     mipMapMode: 0
-    enableMipMap: 1
+    enableMipMap: 0
     sRGBTexture: 1
     linearTexture: 0
     fadeOut: 0
@@ -64,9 +64,9 @@ TextureImporter:
   spriteBorder: {x: 0, y: 0, z: 0, w: 0}
   spriteGenerateFallbackPhysicsShape: 1
   alphaUsage: 1
-  alphaIsTransparency: 0
+  alphaIsTransparency: 1
   spriteTessellationDetail: -1
-  textureType: 0
+  textureType: 8
   textureShape: 1
   singleChannelComponent: 0
   flipbookRows: 1
@@ -151,10 +151,10 @@ TextureImporter:
       name: icon_android_fg_1024_0
       rect:
         serializedVersion: 2
-        x: 311
-        y: 658
-        width: 402
-        height: 63
+        x: 136
+        y: 333
+        width: 228
+        height: 36
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -173,10 +173,10 @@ TextureImporter:
       name: icon_android_fg_1024_1
       rect:
         serializedVersion: 2
-        x: 311
-        y: 540
-        width: 259
-        height: 62
+        x: 136
+        y: 266
+        width: 147
+        height: 37
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -195,10 +195,10 @@ TextureImporter:
       name: icon_android_fg_1024_2
       rect:
         serializedVersion: 2
-        x: 311
-        y: 422
-        width: 146
-        height: 62
+        x: 136
+        y: 200
+        width: 84
+        height: 36
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -217,10 +217,10 @@ TextureImporter:
       name: icon_android_fg_1024_3
       rect:
         serializedVersion: 2
-        x: 311
-        y: 303
-        width: 62
-        height: 63
+        x: 136
+        y: 133
+        width: 36
+        height: 36
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
