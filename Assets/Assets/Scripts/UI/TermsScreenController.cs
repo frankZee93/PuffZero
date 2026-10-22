@@ -17,15 +17,22 @@ public class TermsScreenController : MonoBehaviour
             return;
         }
 
-        // Otherwise, make sure it's visible and lock the button.
+        // Otherwise, make sure it's visible.
         if (pageRoot != null) pageRoot.SetActive(true);
-        if (continueButton != null) continueButton.interactable = false;
 
-        // Listen for the toggle changing
-        if (agreeToggle != null) agreeToggle.onValueChanged.AddListener(OnToggleChanged);
+        // Force the toggle to be OFF by default on a fresh launch, BEFORE adding the listener.
+        if (agreeToggle != null)
+        {
+            agreeToggle.isOn = false;
+            agreeToggle.onValueChanged.AddListener(OnToggleChanged);
+        }
 
-        // Listen for the button click
-        if (continueButton != null) continueButton.onClick.AddListener(OnContinueClicked);
+        // Lock the button.
+        if (continueButton != null)
+        {
+            continueButton.interactable = false;
+            continueButton.onClick.AddListener(OnContinueClicked);
+        }
     }
 
     void OnToggleChanged(bool isOn)
